@@ -11,28 +11,9 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
-      - uses: kirick13/build-npm-package-action@f9a218b90bef658c8885711078e527144140c395
+      - uses: kirick13/build-npm-package-action@a1fab7c7dfd9f143bc1f53357006c32ae95b38e2
         with:
           npm-token: ${{ secrets.NPM_TOKEN }}
-      # - run: |
-      #     PACKAGE_VERSION="$(jq -r .version package.json)"
-      #     if [[ $PACKAGE_VERSION == *-beta.* ]]; then
-      #       echo "NPM_TAG=beta" >> $GITHUB_ENV
-      #     else
-      #       echo "NPM_TAG=latest" >> $GITHUB_ENV
-      #     fi
-      # - uses: actions/setup-node@v4
-      #   with:
-      #     node-version: 20
-      #     registry-url: https://registry.npmjs.org/
-      # - uses: oven-sh/setup-bun@v2
-      #   with:
-      #     bun-version: 1.1.21
-      # - run: bun install
-      # - run: bun run publish:npm --access public --provenance --tag ${{ env.NPM_TAG }}
-      #   env:
-      #     NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      # - run: bun run redis:down
       - uses: kirick13/notify-action@v1
         with:
           telegram-bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
