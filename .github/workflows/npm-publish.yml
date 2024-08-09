@@ -8,23 +8,29 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
+      - run: |
+          PACKAGE_VERSION=$(jq -r .version package.json)"
+          if [[ $PACKAGE_VERSION == *-beta.* ]]; then
+            echo "NPM_TAG=beta" >> $GITHUB_ENV
+          else
+            echo "NPM_TAG=latest" >> $GITHUB_ENV
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          registry-url: https://registry.npmjs.org/
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.1.21
-      # - name: Start Redis
-      #   uses: supercharge/redis-github-action@1.7.0
-      #   with:
-      #     redis-version: 7.4.0
-      #     redis-port: 16379
       - run: bun install
-      - run: bun run build
-      - run: bun run lint
-      - run: bun run test
+      - run: bun run publish:npm --provenance --tag ${{ env.NPM_TAG }}
+        # env:
+        #   NODE_AUTH_TOKEN: ${{ secrets.npm_token }}
 
   # publish-npm:
   #   needs: build
