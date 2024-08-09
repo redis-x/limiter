@@ -11,7 +11,7 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
-      - uses: kirick13/build-npm-package-action@1a5f41aee7eae89433a83157fb8da65ec7e4a055
+      - uses: kirick13/build-npm-package-action@f9a218b90bef658c8885711078e527144140c395
         with:
           npm-token: ${{ secrets.NPM_TOKEN }}
       # - run: |
