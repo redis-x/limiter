@@ -8,6 +8,10 @@ test/
 eslint.config.{js,mjs,cjs}
 tsconfig.json
 
+# ignore repo configs
+.github/
+.gitea/
+
 # ignore IDE files
 .idea
 .nova

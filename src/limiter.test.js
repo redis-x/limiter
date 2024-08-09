@@ -15,7 +15,7 @@ import {
 const redisClient = createClient({
 	socket: {
 		host: 'localhost',
-		port: Number.parseInt(process.env.REDIS_PORT ?? '16379'),
+		port: 16379,
 	},
 });
 
