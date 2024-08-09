@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
-          PACKAGE_VERSION=$(jq -r .version package.json)"
+          PACKAGE_VERSION="$(jq -r .version package.json)"
           if [[ $PACKAGE_VERSION == *-beta.* ]]; then
             echo "NPM_TAG=beta" >> $GITHUB_ENV
           else
