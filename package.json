@@ -34,7 +34,7 @@
 	"scripts": {
 		"build": "bun run build:types && bun run build:cjs && bun run build:cjs:tests",
 		"build:cjs": "bunx esbuild --bundle --platform=node --format=cjs --packages=external --outfile=dist/main.cjs src/main.js",
-		"build:cjs:tests": "bunx esbuild src/limiter.test.js --outfile=dist/main.test.cjs --format=cjs && sed -i '' 's|require(\"./main.js\")|require(\"./main.cjs\")|g' dist/main.test.cjs",
+		"build:cjs:tests": "bunx esbuild src/limiter.test.js --outfile=dist/main.test.cjs --format=cjs && sed -i 's|require(\"./main.js\")|require(\"./main.cjs\")|g' dist/main.test.cjs",
 		"build:types": "rm -rf dist/esm dist/types ; bunx tsc --skipLibCheck --emitDeclarationOnly && rm dist/**/*.test.d.ts",
 		"lint": "eslint . && tsc --skipLibCheck --noemit",
 		"publish:npm": "bun run build && bun run lint && bun run test && npm publish",
