@@ -31,6 +31,10 @@ jobs:
       - run: bun run publish:npm --access public --provenance --tag ${{ env.NPM_TAG }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - uses: kirick13/notify-action@v1
+        with:
+          telegram-bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          telegram-chat-id: ${{ secrets.TELEGRAM_CHAT_ID }}
 
   # publish-npm:
   #   needs: build
