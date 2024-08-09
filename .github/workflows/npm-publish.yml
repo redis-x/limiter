@@ -11,25 +11,28 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
-      - run: |
-          PACKAGE_VERSION="$(jq -r .version package.json)"
-          if [[ $PACKAGE_VERSION == *-beta.* ]]; then
-            echo "NPM_TAG=beta" >> $GITHUB_ENV
-          else
-            echo "NPM_TAG=latest" >> $GITHUB_ENV
-          fi
-      - uses: actions/setup-node@v4
+      - uses: kirick13/build-npm-package-action@38e5d463e824f86fe413366b39f85c6c5e14e953
         with:
-          node-version: 20
-          registry-url: https://registry.npmjs.org/
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.1.21
-      - run: bun install
-      - run: bun run publish:npm --access public --provenance --tag ${{ env.NPM_TAG }}
-        env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - run: bun run redis:down
+      # - run: |
+      #     PACKAGE_VERSION="$(jq -r .version package.json)"
+      #     if [[ $PACKAGE_VERSION == *-beta.* ]]; then
+      #       echo "NPM_TAG=beta" >> $GITHUB_ENV
+      #     else
+      #       echo "NPM_TAG=latest" >> $GITHUB_ENV
+      #     fi
+      # - uses: actions/setup-node@v4
+      #   with:
+      #     node-version: 20
+      #     registry-url: https://registry.npmjs.org/
+      # - uses: oven-sh/setup-bun@v2
+      #   with:
+      #     bun-version: 1.1.21
+      # - run: bun install
+      # - run: bun run publish:npm --access public --provenance --tag ${{ env.NPM_TAG }}
+      #   env:
+      #     NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # - run: bun run redis:down
       - uses: kirick13/notify-action@v1
         with:
           telegram-bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
