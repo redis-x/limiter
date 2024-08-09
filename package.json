@@ -1,6 +1,6 @@
 {
 	"name": "@redis-x/limiter",
-	"version": "0.1.0-beta.2",
+	"version": "0.1.0-beta.3",
 	"description": "",
 	"publishConfig": {
 		"access": "public"
@@ -38,6 +38,7 @@
 		"build:types": "rm -rf dist/esm dist/types ; bunx tsc --skipLibCheck --emitDeclarationOnly && rm dist/**/*.test.d.ts",
 		"lint": "eslint . && tsc --skipLibCheck --noemit",
 		"publish:npm": "bun run build && bun run lint && bun run test && npm publish",
+		"redis:down": "docker stop test-redis",
 		"redis:up": "docker ps | grep test-redis >/dev/null || docker run --rm -d -p 16379:6379 --name test-redis redis:7-alpine",
 		"test": "bun run redis:up && npm run test:vitest && bun test --coverage",
 		"test:vitest": "vitest run --no-file-parallelism"
