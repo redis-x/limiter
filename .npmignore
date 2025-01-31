@@ -5,7 +5,12 @@ test/
 
 # ignore configs
 .luarc.json
-eslint.config.{js,mjs,cjs}
+biome.json
+# these names cannot be joined to {} syntax
+# otherwise rule n/no-unpublished-import screams at me
+eslint.config.js
+eslint.config.mjs
+eslint.config.cjs
 tsconfig.json
 
 # ignore repo configs

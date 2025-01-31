@@ -1,16 +1,15 @@
-
 import {
 	beforeAll,
 	describe,
 	test,
 	expect,
-}                                    from 'vitest';
-import { createClient }              from 'redis';
-import { RedisXClient }              from '@redis-x/client';
+} from 'vitest';
+import { createClient } from 'redis';
+import { RedisXClient } from '@redis-x/client';
 import {
 	RedisXLimiter,
 	RedisXLimiterLimitExceededError,
-}                                    from './main.js';
+} from './main.js';
 
 const redisClient = createClient({
 	socket: {

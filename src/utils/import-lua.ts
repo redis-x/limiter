@@ -1,11 +1,10 @@
-
-import libFs             from 'node:fs/promises';
-import libPath           from 'node:path';
+import node_fs from 'node:fs/promises';
+import node_path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const import_meta_url = import.meta?.url;
 const current_dir = typeof import_meta_url === 'string'
-	? libPath.dirname(
+	? node_path.dirname(
 		fileURLToPath(import_meta_url),
 	)
 	// eslint-disable-next-line unicorn/prefer-module
@@ -16,19 +15,19 @@ const package_root_dir_promise = (async () => {
 	let current_lookup_dir = current_dir;
 
 	while (true) {
-		const package_json_path = libPath.join(
+		const package_json_path = node_path.join(
 			current_lookup_dir,
 			'package.json',
 		);
 
 		try {
 			// eslint-disable-next-line no-await-in-loop
-			await libFs.stat(package_json_path);
+			await node_fs.stat(package_json_path);
 
 			return current_lookup_dir;
 		}
 		catch {
-			current_lookup_dir = libPath.join(
+			current_lookup_dir = node_path.join(
 				current_lookup_dir,
 				'..',
 			);
@@ -42,12 +41,12 @@ const package_root_dir_promise = (async () => {
 
 /**
  * Reads a file from the file system.
- * @param {string} path The path to the file.
- * @returns {Promise<string>} The contents of the file.
+ * @param path The path to the file.
+ * @returns The contents of the file.
  */
-export async function importLua(path) {
-	const content = await libFs.readFile(
-		libPath.join(
+export async function importLua(path: string): Promise<string> {
+	const content = await node_fs.readFile(
+		node_path.join(
 			await package_root_dir_promise,
 			'lua',
 			path,

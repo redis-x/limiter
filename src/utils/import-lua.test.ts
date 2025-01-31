@@ -1,8 +1,7 @@
-
 import {
 	test,
 	expect,
-}                    from 'vitest';
+} from 'vitest';
 import { importLua } from './import-lua.js';
 
 test('existing file', async () => {

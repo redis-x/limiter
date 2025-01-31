@@ -1,6 +1,6 @@
 {
 	"name": "@redis-x/limiter",
-	"version": "0.1.0-beta.3",
+	"version": "0.1.0-beta.4",
 	"description": "",
 	"publishConfig": {
 		"access": "public"
@@ -15,29 +15,28 @@
 		}
 	},
 	"engines": {
-		"node": ">=14"
+		"node": ">=14.13.1"
 	},
 	"dependencies": {
-		"valibot": "^0.37.0"
+		"valibot": "^0.37"
 	},
 	"peerDependencies": {
-		"@redis-x/client": "^0.2.0-beta.6",
+		"@redis-x/client": "^0.3.0-beta.5",
 		"redis": "^4.6"
 	},
 	"devDependencies": {
-		"@kirick/eslint-config": "^0.1.14",
+		"@kirick/eslint-config": "^0.1.29",
 		"@types/node": "^20.14.14",
 		"eslint": "9.8.0",
 		"typescript": "5.5.4",
 		"vitest": "1.3.1"
 	},
 	"scripts": {
-		"build": "bun run build:types && bun run build:cjs && bun run build:cjs:tests",
-		"build:cjs": "bunx esbuild --bundle --platform=node --format=cjs --packages=external --outfile=dist/main.cjs src/main.js",
-		"build:cjs:tests": "bunx esbuild src/limiter.test.js --outfile=dist/main.test.cjs --format=cjs && sed -i 's|require(\"./main.js\")|require(\"./main.cjs\")|g' dist/main.test.cjs",
-		"build:types": "rm -rf dist/esm dist/types ; bunx tsc --skipLibCheck --emitDeclarationOnly && rm dist/**/*.test.d.ts",
+		"build": "bun run build:ts && bun run build:cjs",
+		"build:cjs": "bun build src/main.js --outfile=dist/main.cjs --platform=node --format=cjs --packages=external",
+		"build:ts": "rm -rf dist/esm types ; tsc",
 		"lint": "eslint . && tsc --skipLibCheck --noemit",
-		"publish:npm": "bun run build && bun run lint && bun run test && npm publish",
+		"publish:npm": "bun run lint && bun run build && bun run test && npm publish",
 		"redis:down": "docker stop test-redis",
 		"redis:up": "docker ps | grep test-redis >/dev/null || docker run --rm -d -p 16379:6379 --name test-redis redis:7-alpine",
 		"test": "bun run redis:up && npm run test:vitest && bun test --coverage",
