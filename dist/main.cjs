@@ -71,9 +71,8 @@ class RedisXLimiterLimitExceededError extends Error {
 var import_promises = __toESM(require("node:fs/promises"));
 var import_node_path = __toESM(require("node:path"));
 var import_node_url = require("node:url");
-var __dirname = "/Users/daniil/Development/Public/redis-x/limiter/src/utils";
-var import_meta_url = import.meta?.url;
-var current_dir = typeof import_meta_url === "string" ? import_node_path.default.dirname(import_node_url.fileURLToPath(import_meta_url)) : __dirname;
+var import_meta_url = `file://${__filename}`;
+var current_dir = import_node_path.default.dirname(import_node_url.fileURLToPath(import_meta_url));
 var package_root_dir_promise = (async () => {
   let current_lookup_dir = current_dir;
   while (true) {

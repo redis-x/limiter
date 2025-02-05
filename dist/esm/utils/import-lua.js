@@ -1,11 +1,8 @@
 import node_fs from 'node:fs/promises';
 import node_path from 'node:path';
 import { fileURLToPath } from 'node:url';
-const import_meta_url = import.meta?.url;
-const current_dir = typeof import_meta_url === 'string'
-    ? node_path.dirname(fileURLToPath(import_meta_url))
-    // eslint-disable-next-line unicorn/prefer-module
-    : __dirname;
+const import_meta_url = import.meta.url;
+const current_dir = node_path.dirname(fileURLToPath(import_meta_url));
 // eslint-disable-next-line unicorn/prefer-top-level-await
 const package_root_dir_promise = (async () => {
     let current_lookup_dir = current_dir;

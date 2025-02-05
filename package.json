@@ -33,7 +33,8 @@
 	},
 	"scripts": {
 		"build": "bun run build:ts && bun run build:cjs",
-		"build:cjs": "bun build src/main.js --outfile=dist/main.cjs --platform=node --format=cjs --packages=external",
+		"build:cjs": "bun build src/main.js --outfile=dist/main.cjs --platform=node --format=cjs --packages=external && sed -i '' 's/import\\.meta\\.url/`file:\\/\\/${__filename}`/g' dist/main.cjs",
+		"## build:cjs": "bunx esbuild --bundle --platform=node --format=cjs --packages=external --outfile=dist/main.cjs src/main.ts",
 		"build:ts": "rm -rf dist/esm types ; tsc",
 		"lint": "eslint . && tsc --skipLibCheck --noemit",
 		"publish:npm": "bun run lint && bun run build && bun run test && npm publish",
