@@ -1,0 +1,3 @@
+import * as v from 'valibot';
+export declare const ValiHitSchema: v.UnionSchema<[v.StrictTupleSchema<[], undefined>, v.StrictTupleSchema<[v.SchemaWithPipe<[v.NumberSchema<undefined>, v.IntegerAction<number, undefined>, v.MinValueAction<number, 0, undefined>]>, v.SchemaWithPipe<[v.NumberSchema<undefined>, v.IntegerAction<number, undefined>, v.MinValueAction<number, 0, undefined>]>], undefined>], undefined>;
+export declare const ValiGetSchema: v.ArraySchema<v.TupleSchema<[v.SchemaWithPipe<[v.NumberSchema<undefined>, v.IntegerAction<number, undefined>, v.MinValueAction<number, -1, undefined>]>, v.SchemaWithPipe<[v.NumberSchema<undefined>, v.IntegerAction<number, undefined>, v.MinValueAction<number, 0, undefined>]>], undefined>, undefined>;
