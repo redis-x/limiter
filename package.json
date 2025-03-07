@@ -1,6 +1,6 @@
 {
 	"name": "@redis-x/limiter",
-	"version": "0.1.0-beta.5",
+	"version": "0.1.1",
 	"description": "A rate limiter implemented with Redis.",
 	"publishConfig": {
 		"access": "public"
