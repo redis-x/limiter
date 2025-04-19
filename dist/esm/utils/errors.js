@@ -7,8 +7,5 @@ export class RedisXLimiterLimitExceededError extends Error {
         this.key = key;
         this.limit_name = limit_name;
         this.ttl = ttl;
-        this.key = key;
-        this.limit_name = limit_name;
-        this.ttl = ttl;
     }
 }

@@ -21,8 +21,7 @@
 		"valibot": "^0.37"
 	},
 	"peerDependencies": {
-		"@redis-x/client": "^0.3.0-beta.5",
-		"redis": "^4.6"
+		"redis": "^4.6.0"
 	},
 	"devDependencies": {
 		"@kirick/eslint-config": "^0.1.29",
@@ -36,8 +35,8 @@
 		"build:cjs": "bun build src/main.js --outfile=dist/main.cjs --platform=node --format=cjs --packages=external && sed -i.bak 's/import\\.meta\\.url/`file:\\/\\/${__filename}`/g' dist/main.cjs && rm dist/main.cjs.bak",
 		"## build:cjs": "bunx esbuild --bundle --platform=node --format=cjs --packages=external --outfile=dist/main.cjs src/main.ts",
 		"build:ts": "rm -rf dist/esm types ; tsc",
+		"check": "bun run lint && bun run build && bun run test",
 		"lint": "eslint . && tsc --skipLibCheck --noemit",
-		"publish:npm": "bun run lint && bun run build && bun run test && npm publish",
 		"redis:down": "docker stop test-redis",
 		"redis:up": "docker ps | grep test-redis >/dev/null || docker run --rm -d -p 16379:6379 --name test-redis redis:7-alpine",
 		"test": "bun run redis:up && npm run test:vitest && bun test --coverage",

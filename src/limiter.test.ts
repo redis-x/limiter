@@ -5,7 +5,6 @@ import {
 	expect,
 } from 'vitest';
 import { createClient } from 'redis';
-import { RedisXClient } from '@redis-x/client';
 import {
 	RedisXLimiter,
 	RedisXLimiterLimitExceededError,
@@ -17,8 +16,6 @@ const redisClient = createClient({
 		port: 16379,
 	},
 });
-
-const redisXClient = new RedisXClient(redisClient);
 
 beforeAll(async () => {
 	await redisClient.connect();
@@ -38,23 +35,11 @@ describe('constructor', () => {
 			),
 		).toBeDefined();
 	});
-
-	test('redis-x client', () => {
-		expect(
-			new RedisXLimiter(
-				redisXClient,
-				{
-					namespace: 'test',
-					limits: {},
-				},
-			),
-		).toBeDefined();
-	});
 });
 
 describe('plain counter', () => {
 	const redisXLimiter = new RedisXLimiter(
-		redisXClient,
+		redisClient,
 		{
 			namespace: 'test',
 			limits: {
@@ -99,7 +84,7 @@ describe('plain counter', () => {
 		class CustomError extends Error {}
 
 		const redisXLimiterError = new RedisXLimiter(
-			redisXClient,
+			redisClient,
 			{
 				namespace: 'test-error',
 				limits: {
@@ -164,7 +149,7 @@ describe('plain counter', () => {
 	});
 
 	test('reset all', async () => {
-		await redisXLimiter.reset(1);
+		await redisXLimiter.resetAll(1);
 
 		await expect(
 			redisXLimiter.get(1),
@@ -214,7 +199,7 @@ describe('plain counter', () => {
 
 describe('counter & unique elements', () => {
 	const redisXLimiter = new RedisXLimiter(
-		redisXClient,
+		redisClient,
 		{
 			namespace: 'test-counter-unique',
 			limits: {
@@ -255,7 +240,7 @@ describe('counter & unique elements', () => {
 	});
 
 	test('reset all', async () => {
-		await redisXLimiter.reset(1);
+		await redisXLimiter.resetAll(1);
 
 		await expect(
 			redisXLimiter.get(1),

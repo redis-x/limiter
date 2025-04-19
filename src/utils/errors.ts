@@ -5,9 +5,5 @@ export class RedisXLimiterLimitExceededError extends Error {
 		public ttl: number,
 	) {
 		super(`[RedisXLimiter] Limit for key "${key}" exceeded.`);
-
-		this.key = key;
-		this.limit_name = limit_name;
-		this.ttl = ttl;
 	}
 }

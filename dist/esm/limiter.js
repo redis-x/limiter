@@ -1,4 +1,3 @@
-import { RedisXClient } from '@redis-x/client';
 import * as v from 'valibot';
 import { RedisXLimiterLimitExceededError } from './utils/errors.js';
 import { importLua } from './utils/import-lua.js';
@@ -12,7 +11,7 @@ const REDIS_PREFIX = '@x:limiter';
 const script_hit_promise = importLua('hit.lua');
 const script_get_promise = importLua('get.lua');
 export class RedisXLimiter {
-    redisXClient;
+    redisClient;
     namespace;
     uses_set = false;
     limit_names = [];
@@ -20,17 +19,12 @@ export class RedisXLimiter {
     error_handlers = new Map();
     /**
      * @param client Redis client.
-     * @param {object} options Options.
-     * @param {string} options.namespace Namespace of the limiter.
-     * @param {L} options.limits Limits.
+     * @param options Options.
+     * @param options.namespace Namespace of the limiter.
+     * @param options.limits Limits.
      */
     constructor(client, options) {
-        if (client instanceof RedisXClient) {
-            this.redisXClient = client;
-        }
-        else {
-            this.redisXClient = new RedisXClient(client);
-        }
+        this.redisClient = client;
         this.namespace = options.namespace;
         for (const [limit_name, data] of Object.entries(options.limits)) {
             this.limit_names.push(limit_name);
@@ -57,7 +51,10 @@ export class RedisXLimiter {
     createError(key, limit_name, ttl) {
         const error_handler = this.error_handlers.get(limit_name);
         if (typeof error_handler === 'function') {
-            error_handler(ttl);
+            const error = error_handler(ttl);
+            if (error instanceof Error) {
+                throw error;
+            }
         }
         throw new RedisXLimiterLimitExceededError(key, limit_name, ttl);
     }
@@ -73,10 +70,13 @@ export class RedisXLimiter {
         }
         const script_hit = await script_hit_promise;
         // console.log('script_hit', script_hit);
-        const response = v.parse(ValiHitSchema, await this.redisXClient.EVAL(script_hit, this.getRedisKeys(key), [
-            ...this.redis_args,
-            ...elements,
-        ]));
+        const response = v.parse(ValiHitSchema, await this.redisClient.EVAL(script_hit, {
+            keys: this.getRedisKeys(key),
+            arguments: [
+                ...this.redis_args,
+                ...elements,
+            ],
+        }));
         // console.log('response', response);
         if (response.length === 2) {
             const [limit_name_index, ttl] = response;
@@ -91,7 +91,12 @@ export class RedisXLimiter {
     async get(key) {
         const script_get = await script_get_promise;
         // console.log('script_get', script_get);
-        const result = v.parse(ValiGetSchema, await this.redisXClient.EVAL(script_get, this.getRedisKeys(key)));
+        const result = v.parse(ValiGetSchema, await this.redisClient.EVAL(script_get, {
+            keys: this.getRedisKeys(key),
+            arguments: [
+                ...this.redis_args,
+            ],
+        }));
         const response = {};
         for (const [index, limit_name] of this.limit_names.entries()) {
             const [counter, ttl] = result[index];
@@ -141,8 +146,21 @@ export class RedisXLimiter {
      * @param limit_names Limit name.
      */
     async reset(key, ...limit_names) {
-        await this.redisXClient.DEL(...limit_names.length > 0
-            ? this.getRedisKeys(key, limit_names)
-            : this.getRedisKeys(key));
+        const keys = this.getRedisKeys(key, limit_names);
+        if (keys.length === 0) {
+            throw new Error('No keys to reset.');
+        }
+        await this.redisClient.DEL(keys);
+    }
+    /**
+     * Resets all limits for the key.
+     * @param key Limiter key to reset.
+     */
+    async resetAll(key) {
+        const keys = this.getRedisKeys(key);
+        if (keys.length === 0) {
+            throw new Error('No keys to reset.');
+        }
+        await this.redisClient.DEL(keys);
     }
 }

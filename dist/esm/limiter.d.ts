@@ -1,12 +1,11 @@
-import { RedisXClient } from '@redis-x/client';
 import type { RedisClientType, RedisModules, RedisFunctions, RedisScripts } from 'redis';
-export type RedisClient = RedisClientType<RedisModules, RedisFunctions, RedisScripts>;
+type RedisClient = RedisClientType<RedisModules, RedisFunctions, RedisScripts>;
 export type LimitDefinition = {
     type: 'counter' | 'set';
     limit: number;
     ttl: number;
     ttl_block?: number;
-    onError?: (ttl: number) => void;
+    onError?: (ttl: number) => Error | void;
 };
 type GetReturns = Record<string, {
     counter: 0;
@@ -17,7 +16,7 @@ type GetReturns = Record<string, {
     ttl: number;
 }>;
 export declare class RedisXLimiter<const L extends Record<string, LimitDefinition>> {
-    private redisXClient;
+    private redisClient;
     private namespace;
     private uses_set;
     private limit_names;
@@ -25,11 +24,11 @@ export declare class RedisXLimiter<const L extends Record<string, LimitDefinitio
     private error_handlers;
     /**
      * @param client Redis client.
-     * @param {object} options Options.
-     * @param {string} options.namespace Namespace of the limiter.
-     * @param {L} options.limits Limits.
+     * @param options Options.
+     * @param options.namespace Namespace of the limiter.
+     * @param options.limits Limits.
      */
-    constructor(client: RedisXClient | RedisClient, options: {
+    constructor(client: RedisClient, options: {
         namespace: string;
         limits: L;
     });
@@ -63,6 +62,14 @@ export declare class RedisXLimiter<const L extends Record<string, LimitDefinitio
      * @param key Limiter key to reset.
      * @param limit_names Limit name.
      */
-    reset(key: string | number, ...limit_names: (string & keyof L)[]): Promise<void>;
+    reset(key: string | number, ...limit_names: [
+        string & keyof L,
+        ...(string & keyof L)[]
+    ]): Promise<void>;
+    /**
+     * Resets all limits for the key.
+     * @param key Limiter key to reset.
+     */
+    resetAll(key: string | number): Promise<void>;
 }
 export {};
