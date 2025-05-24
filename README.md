@@ -1,9 +1,9 @@
 # @redis-x/limiter
 
-A robust rate limiter implemented with Redis for Node.js applications.
-
 [![npm version](https://img.shields.io/npm/v/@redis-x/limiter.svg)](https://www.npmjs.com/package/@redis-x/limiter)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![license](https://img.shields.io/npm/l/@redis-x/limiter.svg?color=blue)](https://github.com/redis-x/limiter/blob/main/LICENSE)
+
+A robust rate limiter implemented with Redis for Node.js applications.
 
 ## Features
 
@@ -12,16 +12,14 @@ A robust rate limiter implemented with Redis for Node.js applications.
 - ⏱️ **Configurable TTL**: Set time limits for both counter expiration and blocking periods
 - 🛠️ **Flexible API**: Check, hit, get, and reset rate limits with a clean interface
 - 🔒 **Type-Safe**: Written in TypeScript with full type definitions
-- 🔌 **Minimal Dependencies**: Only requires Redis client as a peer dependency
-- 🧩 **Custom Error Handling**: Define custom error behavior for limit exceeded scenarios
 
 ## Installation
 
 ```bash
-bun add @redis-x/limiter redis
-# or
+bun i @redis-x/limiter redis
+# or with pnpm
 pnpm add @redis-x/limiter redis
-# or
+# or with npm
 npm install @redis-x/limiter redis
 ```
 
