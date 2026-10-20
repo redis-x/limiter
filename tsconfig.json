@@ -1,27 +1,9 @@
 {
-	"compileOnSave": false,
-	"include": [
-		"src/"
-	],
-	"exclude": [
-		"test/",
-		"**/*.test.js",
-		"**/*.test.ts"
-	],
+	"extends": "./node_modules/@kirick/lint/configs/tsconfig.base.json",
 	"compilerOptions": {
-		"outDir": "dist/esm",
-		"declaration": true,
-		"declarationDir": "dist/esm",
-		"target": "esnext",
-		"module": "esnext",
-		"lib": [
-			"ESNext",
-			"ES2021.String"
-		],
-		"moduleResolution": "node",
-		"allowSyntheticDefaultImports": true,
-		"skipLibCheck": true,
-		"strict": true,
-		"removeComments": false
-	}
+		"lib": ["ESNext", "ES2021.String"],
+		"stripInternal": true
+	},
+	"include": ["src/"],
+	"exclude": ["test/", "**/*.test.js", "**/*.test.ts"]
 }

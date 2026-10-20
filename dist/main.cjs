@@ -1,221 +1,87 @@
-var __create = Object.create;
-var __getProtoOf = Object.getPrototypeOf;
-var __defProp = Object.defineProperty;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __toESM = (mod, isNodeMode, target) => {
-  target = mod != null ? __create(__getProtoOf(mod)) : {};
-  const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
-  for (let key of __getOwnPropNames(mod))
-    if (!__hasOwnProp.call(to, key))
-      __defProp(to, key, {
-        get: () => mod[key],
-        enumerable: true
-      });
-  return to;
-};
-var __moduleCache = /* @__PURE__ */ new WeakMap;
-var __toCommonJS = (from) => {
-  var entry = __moduleCache.get(from), desc;
-  if (entry)
-    return entry;
-  entry = __defProp({}, "__esModule", { value: true });
-  if (from && typeof from === "object" || typeof from === "function")
-    __getOwnPropNames(from).map((key) => !__hasOwnProp.call(entry, key) && __defProp(entry, key, {
-      get: () => from[key],
-      enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable
-    }));
-  __moduleCache.set(from, entry);
-  return entry;
-};
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, {
-      get: all[name],
-      enumerable: true,
-      configurable: true,
-      set: (newValue) => all[name] = () => newValue
-    });
-};
-
-// src/main.ts
-var exports_main = {};
-__export(exports_main, {
-  RedisXLimiterLimitExceededError: () => RedisXLimiterLimitExceededError,
-  RedisXLimiter: () => RedisXLimiter
-});
-module.exports = __toCommonJS(exports_main);
-
-// src/limiter.ts
-var v2 = __toESM(require("valibot"));
-
-// src/utils/errors.ts
-class RedisXLimiterLimitExceededError extends Error {
-  key;
-  limit_name;
-  ttl;
-  constructor(key, limit_name, ttl) {
-    super(`[RedisXLimiter] Limit for key "${key}" exceeded.`);
-    this.key = key;
-    this.limit_name = limit_name;
-    this.ttl = ttl;
-  }
+Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
+let nanoid = require("nanoid");
+//#region src/lua/hit.lua
+var hit_default = "local function set_block(limiter)\n	if limiter.ttl_block > 0 then\n		redis.call(\"HSET\", key_block, limiter.field_block, \"\")\n		redis.call(\"HEXPIREAT\", key_block, ts + limiter.ttl_block, \"FIELDS\", 1, limiter.field_block)\n\n		table.insert(\n			limiters_blocked,\n			{ limiter.name, limiter.ttl_block }\n		)\n\n		return true\n	end\nend\n\nfor _, limiter in ipairs(limiters) do\n	-- ---------------------------------------------------\n	-- fixed window / fixed window with user defined start\n	-- ---------------------------------------------------\n	if limiter.type == \"0\" or limiter.type == \"1\" then\n		local value = redis.call(\"HGET\", limiter.key, limiting_key)\n		local counter = tonumber(value) or 0\n		-- if counter does not exists yet, set it to 1 and set the ttl\n		if counter == 0 then\n			local ts_expire = 0\n			-- for fixed window, calculate end of the window\n			if limiter.type == \"0\" then\n				ts_expire = (math.floor(ts / limiter.ttl) + 1) * limiter.ttl\n			-- for fixed window with user defined start, start window now\n			else\n				ts_expire = ts + limiter.ttl\n			end\n\n			redis.call(\"HSET\", limiter.key, limiting_key, 1)\n			redis.call(\"HEXPIREAT\", limiter.key, ts_expire, \"FIELDS\", 1, limiting_key)\n		elseif counter >= limiter.limit then\n			if set_block(limiter) ~= true then\n				table.insert(limiters_blocked, {\n					limiter.name,\n					redis.call(\"HTTL\", limiter.key, \"FIELDS\", 1, limiting_key)[1]\n				})\n			end\n		else\n			redis.call(\"HINCRBY\", limiter.key, limiting_key, 1)\n		end\n	else\n		return redis.error_reply(\"UNSUP unsupported limiter type \" .. limiter.type)\n	end\nend\n\nif #limiters_blocked > 0 then\n	return { 1, limiters_blocked }\nend\n";
+//#endregion
+//#region src/lua/prepare.lua
+var prepare_default = "local key_block = KEYS[1]\nlocal limiting_key = ARGV[1]\nlocal hit_id = ARGV[2]\n\nlocal limiters = {}\nlocal limiters_block_fields = {}\n-- Each limiter is passed as: type, name, limit, ttl, block.\nfor i = 3, #ARGV, 5 do\n	local name = ARGV[i + 1]\n	local field_block = name .. \":\" .. limiting_key\n	table.insert(limiters, {\n		type = ARGV[i],\n		name = name,\n		key = KEYS[#limiters + 2],\n		field_block = field_block,\n		limit = tonumber(ARGV[i + 2]),\n		ttl = tonumber(ARGV[i + 3]),\n		ttl_block = tonumber(ARGV[i + 4]),\n	})\n	table.insert(limiters_block_fields, field_block)\nend\n\nlocal resp_blocked = redis.call('HTTL', key_block, \"FIELDS\", #limiters_block_fields, unpack(limiters_block_fields))\nlocal limiters_blocked = {}\nfor index, limiter in ipairs(limiters) do\n	local ttl = resp_blocked[index]\n	if ttl > 0 then\n		table.insert(\n			limiters_blocked,\n			{ limiter.name, ttl }\n		)\n	end\nend\n\nif #limiters_blocked > 0 then\n	return { 1, limiters_blocked }\nend\n";
+//#endregion
+//#region src/lua/time.lua
+var time_default = "local ts = tonumber(redis.call('TIME')[1])\n";
+//#endregion
+//#region src/utils.ts
+const REDIS_PREFIX = "@x:limiter";
+//#endregion
+//#region src/scripts.ts
+const SCRIPT_HIT = [
+	time_default,
+	prepare_default,
+	hit_default
+].join("\n");
+/**
+* Hits limiters with the given key. If any of the limiters are exceeded, does nothing.
+*/
+async function hit(redisClient, key, hit_id, redis_keys, redis_args) {
+	const result = await redisClient.sendCommand([
+		"EVAL",
+		SCRIPT_HIT,
+		String(redis_keys.length + 1),
+		`${REDIS_PREFIX}:_block`,
+		...redis_keys,
+		String(key),
+		hit_id ?? (0, nanoid.nanoid)(16),
+		...redis_args
+	]);
+	console.log("result", result);
 }
-
-// src/utils/import-lua.ts
-var import_promises = __toESM(require("node:fs/promises"));
-var import_node_path = __toESM(require("node:path"));
-var import_node_url = require("node:url");
-var import_meta_url = `file://${__filename}`;
-var current_dir = import_node_path.default.dirname(import_node_url.fileURLToPath(import_meta_url));
-var package_root_dir_promise = (async () => {
-  let current_lookup_dir = current_dir;
-  while (true) {
-    const package_json_path = import_node_path.default.join(current_lookup_dir, "package.json");
-    try {
-      await import_promises.default.stat(package_json_path);
-      return current_lookup_dir;
-    } catch {
-      current_lookup_dir = import_node_path.default.join(current_lookup_dir, "..");
-      if (current_lookup_dir === "/") {
-        throw new Error("Could not find package.json");
-      }
-    }
-  }
-})();
-async function importLua(path) {
-  const content = await import_promises.default.readFile(import_node_path.default.join(await package_root_dir_promise, "lua", path), "utf8");
-  return content.replaceAll(/--.*\n/g, "").replaceAll(/\s+/g, " ").trim();
-}
-
-// src/utils/validators.ts
-var v = __toESM(require("valibot"));
-var ValiHitSchema = v.union([
-  v.strictTuple([]),
-  v.strictTuple([
-    v.pipe(v.number(), v.integer(), v.minValue(0)),
-    v.pipe(v.number(), v.integer(), v.minValue(0))
-  ])
-]);
-var ValiGetSchema = v.array(v.tuple([
-  v.pipe(v.number(), v.integer(), v.minValue(-1)),
-  v.pipe(v.number(), v.integer(), v.minValue(0))
-]));
-
-// src/limiter.ts
-var REDIS_PREFIX = "@x:limiter";
-var script_hit_promise = importLua("hit.lua");
-var script_get_promise = importLua("get.lua");
-
-class RedisXLimiter {
-  redisClient;
-  namespace;
-  uses_set = false;
-  limit_names = [];
-  redis_args = [];
-  error_handlers = new Map;
-  constructor(client, options) {
-    this.redisClient = client;
-    this.namespace = options.namespace;
-    for (const [limit_name, data] of Object.entries(options.limits)) {
-      this.limit_names.push(limit_name);
-      if (data.type === "set") {
-        this.uses_set = true;
-      }
-      this.redis_args.push(data.type === "counter" ? "0" : "1", String(data.limit), String(data.ttl), String(data.ttl_block ?? 0));
-      if (typeof data.onError === "function") {
-        this.error_handlers.set(limit_name, data.onError);
-      }
-    }
-  }
-  getRedisKeys(key, limit_names = this.limit_names) {
-    return limit_names.map((limit_name) => `${REDIS_PREFIX}:${this.namespace}:${key}:${limit_name}`);
-  }
-  createError(key, limit_name, ttl) {
-    const error_handler = this.error_handlers.get(limit_name);
-    if (typeof error_handler === "function") {
-      const error = error_handler(ttl);
-      if (error instanceof Error) {
-        throw error;
-      }
-    }
-    throw new RedisXLimiterLimitExceededError(key, limit_name, ttl);
-  }
-  async hit(key, ...elements) {
-    if (this.uses_set && elements.length === 0) {
-      throw new Error("Elements are required for set limiters.");
-    }
-    const script_hit = await script_hit_promise;
-    const response = v2.parse(ValiHitSchema, await this.redisClient.EVAL(script_hit, {
-      keys: this.getRedisKeys(key),
-      arguments: [
-        ...this.redis_args,
-        ...elements
-      ]
-    }));
-    if (response.length === 2) {
-      const [limit_name_index, ttl] = response;
-      this.createError(key, this.limit_names[limit_name_index], ttl);
-    }
-  }
-  async get(key) {
-    const script_get = await script_get_promise;
-    const result = v2.parse(ValiGetSchema, await this.redisClient.EVAL(script_get, {
-      keys: this.getRedisKeys(key),
-      arguments: [
-        ...this.redis_args
-      ]
-    }));
-    const response = {};
-    for (const [index, limit_name] of this.limit_names.entries()) {
-      const [counter, ttl] = result[index];
-      if (counter === -1) {
-        response[limit_name] = {
-          ttl
-        };
-      } else if (ttl === 0) {
-        response[limit_name] = {
-          counter: 0
-        };
-      } else {
-        response[limit_name] = {
-          counter,
-          ttl
-        };
-      }
-    }
-    return response;
-  }
-  async check(key) {
-    const state = await this.get(key);
-    let blocked_limit_name = "";
-    let blocked_ttl = 0;
-    for (const [
-      limit_name,
-      limit_state
-    ] of Object.entries(state)) {
-      if ("counter" in limit_state === false && limit_state.ttl > blocked_ttl) {
-        blocked_limit_name = limit_name;
-        blocked_ttl = limit_state.ttl;
-      }
-    }
-    if (blocked_ttl > 0) {
-      this.createError(key, blocked_limit_name, blocked_ttl);
-    }
-  }
-  async reset(key, ...limit_names) {
-    const keys = this.getRedisKeys(key, limit_names);
-    if (keys.length === 0) {
-      throw new Error("No keys to reset.");
-    }
-    await this.redisClient.DEL(keys);
-  }
-  async resetAll(key) {
-    const keys = this.getRedisKeys(key);
-    if (keys.length === 0) {
-      throw new Error("No keys to reset.");
-    }
-    await this.redisClient.DEL(keys);
-  }
-}
+//#endregion
+//#region src/main.ts
+let RedisXLimiterType = /* @__PURE__ */ function(RedisXLimiterType) {
+	RedisXLimiterType["FixedWindow"] = "0";
+	RedisXLimiterType["FixedWindowUserDefinedStart"] = "1";
+	RedisXLimiterType["SlidingWindow"] = "2";
+	RedisXLimiterType["SlidingWindowApproximate"] = "3";
+	RedisXLimiterType["TokenBucket"] = "4";
+	return RedisXLimiterType;
+}({});
+const inkey_regex = /^[a-z\d](?:[a-z\d._+-]*[a-z\d])?$/iu;
+const MAX_TTL_SECONDS = 2147483647;
+var RedisXLimiter = class {
+	type;
+	name;
+	priority = Number.MAX_SAFE_INTEGER;
+	#redisClient;
+	/** @internal */
+	_redis_args;
+	constructor(redisClient, options) {
+		var _options$block_ttl;
+		this.type = options.type;
+		this.name = options.name;
+		if (!inkey_regex.test(this.name)) throw new TypeError("Invalid limiter name.");
+		if (!Number.isSafeInteger(options.limit) || options.limit <= 0) throw new TypeError("Invalid limit: expected a positive safe integer.");
+		if (!Number.isSafeInteger(options.ttl) || options.ttl <= 0 || options.ttl > MAX_TTL_SECONDS) throw new TypeError(`Invalid ttl: expected an integer from 1 to ${MAX_TTL_SECONDS} seconds.`);
+		if (options.block_ttl !== void 0 && (!Number.isSafeInteger(options.block_ttl) || options.block_ttl <= 0 || options.block_ttl > MAX_TTL_SECONDS)) throw new TypeError(`Invalid block_ttl: expected an integer from 1 to ${MAX_TTL_SECONDS} seconds.`);
+		if (options.priority !== void 0) this.priority = options.priority;
+		this.#redisClient = redisClient;
+		this._redis_args = [
+			options.type,
+			options.name,
+			options.limit.toString(),
+			options.ttl.toString(),
+			((_options$block_ttl = options.block_ttl) === null || _options$block_ttl === void 0 ? void 0 : _options$block_ttl.toString()) ?? "-1"
+		];
+	}
+	/** @internal */
+	_getRedisKey(key) {
+		if (this.type === "2") return `${REDIS_PREFIX}:${this.name}:${key}`;
+		return `${REDIS_PREFIX}:${this.name}`;
+	}
+	async hit(key, hit_id) {
+		if (typeof key === "string" && !inkey_regex.test(key)) throw new TypeError("Invalid key.");
+		if (this.type !== "2" && hit_id !== void 0) throw new Error("Passing hit_id is only supported for sliding window limiter.");
+		await hit(this.#redisClient, key, hit_id, [this._getRedisKey(key)], this._redis_args);
+	}
+};
+//#endregion
+exports.RedisXLimiter = RedisXLimiter;
+exports.RedisXLimiterType = RedisXLimiterType;
