@@ -79,7 +79,8 @@ This section records the proposed layout. It does not claim that all command-lev
 
 - Read the fields for the current and previous epochs of the same limiting ID to calculate the result.
 - Retain each epoch's field for two window lengths.
-- The exact expiration anchor and weighting/boundary calculation remain to be specified. Do not accidentally refresh an epoch's lifetime indefinitely on each hit.
+- The user's prototype reviewed on 2026-10-20 weights the previous count by `1 - (ts % ttl) / ttl`, then adds the current count. This is the standard two-window estimate.
+- The user's follow-up implementation checks estimated usage including the incoming hit and retains each epoch until the end of the following window. Following explicit authorization, exhaustion-only responses now use the retry-time derivation below, rounded upward to whole seconds. Do not accidentally refresh an epoch's lifetime indefinitely on each hit.
 
 ### Token bucket
 
@@ -435,3 +436,48 @@ References: [Redis Lua response conversion](https://redis.io/docs/latest/develop
 - Active explicit blocks prevent refresh. If another limiter rejects a batch, neither the repeated member's deadline nor its key expiration changes; verified in both limiter orders.
 - Once an ID expires, attempting it again costs new unique capacity. Verified rejection when another active member already filled that capacity.
 - Tested the actual updated Lua on local Redis using unique temporary keys and removed only those keys. No implementation files were changed by the assistant.
+
+## Approximate sliding-window review (2026-10-20)
+
+The user requested review of the approximate sliding-window implementation and an explanation of when the next request can be allowed. This is review and mathematical analysis; implementation was not changed.
+
+- The overlap weight and weighted-count expression are correct for a two-window approximation.
+- Confirmed enforcement bypass: HMGET reads `epoch:limitingID` fields, but HSET, HINCRBY, and HEXPIREAT use the bare limiting ID. Starting empty, five hits at limit 2 all succeeded and the bare field stayed at 1. All usage writes and expiration must address the current epoch's field.
+- The admission condition needs an explicit fractional-count policy. Under the intended maximum-usage interpretation, require `estimatedUsage + 1 <= limit`; checking only `estimatedUsage >= limit` permits a hit at 9.5 with limit 10, taking estimated usage to 10.5. The current script entered the success path with seeded previous count 1 and current count 9 halfway through a window.
+- The retention deadline is one window too late. Because getEpoch returns `floor(ts / ttl) + 1`, epoch start is `(epoch - 1) * ttl`. Retaining through the end of the following window requires `(epoch + 1) * ttl`; the current `(epoch + 2) * ttl` retains an extra window. Verified the extra 60 seconds for a 60-second window.
+- HTTL on the bare limiting ID returns -2 when only the expected epoch fields exist. Even looking up the correct epoch field would give data-retention time, not capacity-recovery time; capacity can recover during a window or after the next boundary.
+- Redis reproductions used the existing prepare/hit Lua with a controlled timestamp substituted for time.lua in memory, unique temporary keys, and cleanup limited to those keys. The repository's FLUSHDB helper was not run.
+
+### Derived retry time: assistant recommendation
+
+Assume no further accepted hits, unchanged configuration, and no independent active block. Define window length W, elapsed seconds e = ts % W, remaining seconds R = W - e, previous count P, current count C, and limit L. Estimated usage is U = C + P * R / W. One more hit fits when U <= A, where A = L - 1.
+
+- If U <= A, the delay is zero.
+- Otherwise, if C <= A, the previous contribution can decay enough within this window. Delay is `(U - A) * W / P`; P is necessarily positive in this branch.
+- If C > A, current usage alone prevents admission until rollover. Wait R seconds, then C becomes the previous count and decays from C to A. Total delay is `R + W * (C - A) / C`.
+- Round the delay upward for integer-second Retry-After values. For the script's integer clock, the middle expression can equivalently be calculated as `ceil((C * W + P * R - A * W) / P)`, and the last as `R + ceil(W * (C - A) / C)`.
+- Example: W=60, L=10, e=15, P=8, C=4 gives U=10 and a 7.5-second delay, rounded up to 8. With the same W, L, and e but P=0 and C=10, wait 45 seconds to rollover plus 6 seconds of decay, totaling 51.
+- The result is the earliest quota recovery under the approximation and no further traffic; it is not a reservation. An independent block still prevents access until it expires or is lifted, and reset can change usage.
+- Verified the rounded formula against an integer-second simulation for 1,428,480 states covering both sides of rollover, limit 1, zero previous counts, and counts above the configured limit.
+
+References: [two-window weighting](https://smudge.ai/blog/ratelimit-algorithms) and [HTTL return values](https://redis.io/docs/latest/commands/httl/).
+
+### Follow-up verification of the user's fixes
+
+- The user requested verification of the four review comments. Three are resolved; the exhaustion-only retry result remains unfinished.
+- HSET, HINCRBY, and HEXPIREAT now consistently use `field_current`. Two hits at limit 2 accumulate in the epoch field; the third rejects without changing the count.
+- The condition `counter + 1 > limiter.limit` rejects fractional over-capacity usage and permits equality. Verified rejection with estimated usage 9.5 at limit 10 and acceptance with estimated usage 9.
+- The user changed get_epoch to the zero-based `floor(ts / ttl)` and added get_epoch_ts_end. Consequently, `get_epoch_ts_end(epoch + 1, ttl)` correctly expires approximate counters at epoch start plus two windows. HINCRBY preserves that deadline.
+- Fixed-window expiration still lands at the next boundary after this shared helper change; verified at the boundary, one second after it, and one second before the following boundary.
+- The exhaustion-only branch still calls HTTL on the bare limiting ID and returns -2. With window 60, limit 2, two current hits and 15 seconds elapsed, the derived quota-recovery delay is 75 seconds; the current result remains -2.
+- Verified eight scenarios on local Redis using controlled script timestamps and unique temporary keys, including explicit blocking and previous-window usage at rollover. Removed only those keys; implementation files were not changed by the assistant.
+
+### Authorized retry-time implementation
+
+- The user explicitly requested implementing the seconds until another hit can fit.
+- Replaced the approximate limiter's exhaustion-only HTTL lookup with the derived delay. When current usage is below the limit, calculate how long the previous contribution needs to decay; otherwise, wait for rollover and subsequent decay of current usage. Round up with math.ceil.
+- Explicit blocking continues to return the configured block duration. The calculated retry delay assumes unchanged configuration and no additional accepted hits; it reserves no capacity.
+- Calculate weighted previous usage as `previous * remaining / window`, multiplying before dividing. The former `previous * (1 - elapsed / window)` expression could reject exact fits due to floating-point drift: window 3, elapsed 1, previous 9, current 3, limit 10.
+- Added `src/lua/approximate-window.test.ts` with deterministic script timestamps and isolated Redis keys. The tests assert rejection one second before the returned delay and acceptance at that delay, without recording rejected hits or creating blocks in exhaustion-only mode.
+- Coverage includes fractional and exact recovery, recovery at and after rollover, empty current windows, limit 1, one-second windows, counts above a reduced limit, exact-fit precision, and unchanged explicit-block reporting.
+- Validation: all 13 tests passed under both Vitest and Bun (59 assertions under Bun). TypeScript, ESLint, Oxlint, Biome, and whitespace checks passed. The existing FLUSHDB test helper was not run.
