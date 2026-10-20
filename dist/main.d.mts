@@ -11,7 +11,6 @@ export declare enum RedisXLimiterType {
   TokenBucket = "4"
 }
 export declare class RedisXLimiter {
-  #private;
   readonly type: RedisXLimiterType;
   readonly name: string;
   readonly priority: number;
@@ -24,6 +23,11 @@ export declare class RedisXLimiter {
     block_ttl?: number;
   });
   hit(key: string | number, hit_id?: string): Promise<void>;
+}
+export declare class RedisXLimitersBatch {
+  #private;
+  constructor(...limiters: RedisXLimiter[]);
+  hit(key: string, hit_id?: string): Promise<void>;
 }
 //#endregion
 export {};

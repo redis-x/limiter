@@ -12,6 +12,7 @@ local function set_block(limiter)
 	end
 end
 
+local hit_args = {}
 for _, limiter in ipairs(limiters) do
 	-- ---------------------------------------------------
 	-- fixed window / fixed window with user defined start
@@ -30,8 +31,12 @@ for _, limiter in ipairs(limiters) do
 				ts_expire = ts + limiter.ttl
 			end
 
-			redis.call("HSET", limiter.key, limiting_key, 1)
-			redis.call("HEXPIREAT", limiter.key, ts_expire, "FIELDS", 1, limiting_key)
+			table.insert(hit_args, {
+				"HSET", limiter.key, limiting_key, 1,
+			})
+			table.insert(hit_args, {
+				"HEXPIREAT", limiter.key, ts_expire, "FIELDS", 1, limiting_key,
+			})
 		elseif counter >= limiter.limit then
 			if set_block(limiter) ~= true then
 				table.insert(limiters_blocked, {
@@ -40,7 +45,9 @@ for _, limiter in ipairs(limiters) do
 				})
 			end
 		else
-			redis.call("HINCRBY", limiter.key, limiting_key, 1)
+			table.insert(hit_args, {
+				"HINCRBY", limiter.key, limiting_key, 1,
+			})
 		end
 	else
 		return redis.error_reply("UNSUP unsupported limiter type " .. limiter.type)
@@ -49,4 +56,8 @@ end
 
 if #limiters_blocked > 0 then
 	return { 1, limiters_blocked }
+end
+
+for _, args in ipairs(hit_args) do
+	redis.call(unpack(args))
 end

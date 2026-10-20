@@ -363,3 +363,46 @@ References: [Vitest configuration](https://vitest.dev/config/) and [Vite plugin 
 - Added `vitest.config.ts` with an inline `lua-text` Vite plugin. Its pre-load hook reads `.lua` files as UTF-8 and exports their contents as a JavaScript string using JSON encoding.
 - Existing Lua imports, limiter logic, tsdown configuration, dependencies, and test selection remain unchanged. Vitest discovers this configuration automatically.
 - Verification: `npm run test:vitest -- src/main/options.test.ts` passes all nine constructor tests using the saved configuration. TypeScript and config lint/format checks pass. The Redis integration test that imports the FLUSHDB helper was not run for this configuration change.
+
+## Review of the user's batch write deferral (2026-10-20)
+
+The user asked whether their change fixes finding #3. This was a review only; implementation was not modified.
+
+- The original rejected-batch quota-consumption issue is fixed for distinct limiter states: `hit.lua` collects counter/expiration writes in `hit_args`, returns before executing them when any limiter rejects, and executes them only after every limiter passes.
+- Verified 16 rejection scenarios on local Redis: both fixed-window types, both limiter orders, fresh or partially used companion counters, and explicit blocking or exhaustion-only behavior. The companion counter and its absolute expiration remained unchanged, and the exhausted counter remained at its limit. An accepted-batch control updated both counters.
+- Blocking fields are still created during the checking loop when a limiter exceeds its quota. This does not consume quota from other limiters; the wrapper comment saying an exceeded batch “does nothing” is broader than the implementation.
+- A duplicate-entry edge case remains: when the same limiter/subject appears twice, both entries read the same pre-write counter. Reproduced with counter 1 and limit 2: two queued increments produced counter 3 and a successful result with no block. The eventual batch API should reject or coalesce duplicate limiter identities in JavaScript, or explicitly account for their combined cost. This is a recommendation; duplicate handling has not been selected.
+- All verification used unique temporary Redis keys and deleted only those keys afterward. The existing FLUSHDB test helper was not run.
+
+## Review of the proposed global name registry (2026-10-20)
+
+The user added a module-level `LIMITER_NAMES` set and asked for a review. Implementation was not modified.
+
+- Constructor-level name uniqueness does not prevent the same existing instance from appearing twice in one batch. Verified with a stub Redis client: collecting keys/arguments from `[limiter, limiter]` still sends duplicate entries through the shared EVAL executor. The previously reproduced overcount scenario is therefore not prevented.
+- The constructor adds the name before validating numeric configuration. A failed construction reserves its name for the lifetime of the loaded module. Reproduced an invalid limit followed by a corrected configuration with the same name: the second construction throws a duplicate-name error.
+- The global set also rejects repeated names across independent limiter lifecycles or separate Redis clients. That restriction is broader than preventing duplicate entries in an individual batch.
+- Recommendation: validate duplicate names using a set local to the batch constructor, with the separately recommended same-client check. This catches both repeated references to one instance and distinct instances with the same name, while allowing reuse across separate batches. A global registry would be a separate configuration policy, not a substitute for batch validation.
+- Verification: all nine existing constructor tests now fail with duplicate-name errors. No Redis writes were performed during this review.
+
+### Follow-up: registration after validation and batch deduplication
+
+- The user moved name registration after numeric validation and added `RedisXLimitersBatch`, whose constructor deduplicates limiter references with `new Set(limiters)` before collecting arguments.
+- Both previously identified concrete issues are addressed in the current construction path. Verified that failed limit, ttl, and block_ttl validation permits a corrected construction with the same name. Verified that a batch containing repeated references reads each unique limiter's arguments once, in first-occurrence order.
+- The module-wide name registry remains and still forbids a second instance with the same name even on another Redis client. This remains a broader naming policy than batch deduplication.
+- Current constructor tests: five pass and four fail because successful fixtures reuse the name `validation`. If module-wide name uniqueness is intentional, successful fixtures need distinct names or module isolation.
+- `RedisXLimitersBatch.hit` is still a stub, so this review verifies batch argument construction rather than end-to-end batch execution. When keys are added, derive keys and arguments from the same deduplicated list.
+- Implementation was not changed and no Redis writes were performed during this follow-up review.
+
+### Batch client initialization
+
+- The user added storage of the deduplicated limiter list, client identity checks, and batch hit execution, then asked how to resolve TS2564 without making the client nullable.
+- The current constructor assigns `#redisClient` only inside a loop. An empty batch skips that loop, so construction can complete without a client. TypeScript reports TS2564 at the field declaration.
+- Recommendation: reject an empty batch, directly assign the first limiter's client before the loop, then compare every limiter's client against it while collecting arguments. Keep the field typed as `RedisClient`; a definite-assignment assertion would hide the empty-batch problem.
+- This is advice only; no implementation change or empty-batch policy was applied. Reference: [TypeScript strict property initialization](https://www.typescriptlang.org/tsconfig/strictPropertyInitialization.html).
+
+### Authorized options-test fixture update
+
+- The user requested updating `src/main/options.test.ts` so limiter names are not reused.
+- Added a fixture factory that gives every constructor attempt a distinct `validation-N` name, including invalid-input cases. Argument-serialization assertions use the name from that case's fixture.
+- The module-wide name registry and limiter implementation are unchanged.
+- Validation: all nine options tests pass under both Vitest and Bun. ESLint, Oxlint, Biome, and whitespace checks pass for the fixture update.

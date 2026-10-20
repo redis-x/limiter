@@ -12,12 +12,15 @@ export enum RedisXLimiterType {
 const inkey_regex = /^[a-z\d](?:[a-z\d._+-]*[a-z\d])?$/iu;
 // Bound durations so calculated deadlines stay within Redis hash-field expiration limits.
 const MAX_TTL_SECONDS = 2_147_483_647;
+const LIMITER_NAMES = new Set<string>();
 
 export class RedisXLimiter {
 	readonly type: RedisXLimiterType;
 	readonly name: string;
 	readonly priority: number = Number.MAX_SAFE_INTEGER;
-	#redisClient: RedisClient;
+	/** @internal */
+	// eslint-disable-next-line unicorn/prefer-private-class-fields
+	_redisClient: RedisClient;
 	/** @internal */
 	// eslint-disable-next-line unicorn/prefer-private-class-fields
 	_redis_args: string[];
@@ -65,11 +68,19 @@ export class RedisXLimiter {
 			);
 		}
 
+		if (LIMITER_NAMES.has(this.name)) {
+			throw new TypeError(
+				'Duplicate limiter name. You can not reuse the same name for multiple limiters.',
+			);
+		}
+
+		LIMITER_NAMES.add(this.name);
+
 		if (options.priority !== undefined) {
 			this.priority = options.priority;
 		}
 
-		this.#redisClient = redisClient;
+		this._redisClient = redisClient;
 
 		this._redis_args = [
 			options.type,
@@ -102,7 +113,7 @@ export class RedisXLimiter {
 		}
 
 		await hit(
-			this.#redisClient,
+			this._redisClient,
 			key,
 			hit_id,
 			[this._getRedisKey(key)],
@@ -111,14 +122,37 @@ export class RedisXLimiter {
 	}
 }
 
-// export class RedisXLimitersBatch {
-// 	#redis_args: string[];
-//
-// 	constructor(...limiters: RedisXLimiter[]) {
-// 		this.#redis_args = limiters.flatMap((limiter) => limiter._redis_args);
-// 	}
-//
-// 	hit(key: string, hit_id?: string): void {
-// 		//
-// 	}
-// }
+export class RedisXLimitersBatch {
+	#limiters: RedisXLimiter[];
+	#redisClient: RedisClient;
+	#redis_args: string[] = [];
+
+	constructor(...limiters: RedisXLimiter[]) {
+		this.#limiters = [...new Set(limiters)];
+
+		const redisClient = this.#limiters[0]?._redisClient;
+		if (redisClient === undefined) {
+			throw new TypeError('At least one limiter is required.');
+		}
+
+		this.#redisClient = redisClient;
+
+		for (const limiter of this.#limiters) {
+			if (limiter._redisClient !== this.#redisClient) {
+				throw new Error('All limiters must use the same Redis client.');
+			}
+
+			this.#redis_args.push(...limiter._redis_args);
+		}
+	}
+
+	async hit(key: string, hit_id?: string): Promise<void> {
+		await hit(
+			this.#redisClient,
+			key,
+			hit_id,
+			this.#limiters.map((limiter) => limiter._getRedisKey(key)),
+			this.#redis_args,
+		);
+	}
+}

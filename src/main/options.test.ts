@@ -9,6 +9,13 @@ const options = {
 	limit: 2,
 	ttl: 10,
 };
+let limiterId = 0;
+
+/** Creates options with a unique limiter name for each constructor attempt. */
+function createOptions(): typeof options {
+	limiterId += 1;
+	return { ...options, name: `validation-${limiterId}` };
+}
 
 const invalidNumbers = [
 	1.5,
@@ -25,7 +32,7 @@ test.each(['limit', 'ttl'] as const)('validates %s at construction', (key) => {
 		expect(
 			() =>
 				new RedisXLimiter(redisClient, {
-					...options,
+					...createOptions(),
 					[key]: value,
 				} as typeof options),
 		).toThrow(`Invalid ${key}:`);
@@ -37,7 +44,7 @@ test('validates block_ttl at construction', () => {
 		expect(
 			() =>
 				new RedisXLimiter(redisClient, {
-					...options,
+					...createOptions(),
 					block_ttl: value as number,
 				}),
 		).toThrow('Invalid block_ttl:');
@@ -46,7 +53,11 @@ test('validates block_ttl at construction', () => {
 
 test('rejects window durations beyond the supported range', () => {
 	expect(
-		() => new RedisXLimiter(redisClient, { ...options, ttl: 2_147_483_648 }),
+		() =>
+			new RedisXLimiter(redisClient, {
+				...createOptions(),
+				ttl: 2_147_483_648,
+			}),
 	).toThrow('Invalid ttl:');
 });
 
@@ -54,7 +65,7 @@ test('accepts the maximum supported capacity and duration', () => {
 	expect(
 		() =>
 			new RedisXLimiter(redisClient, {
-				...options,
+				...createOptions(),
 				limit: Number.MAX_SAFE_INTEGER,
 				ttl: 2_147_483_647,
 			}),
@@ -62,16 +73,24 @@ test('accepts the maximum supported capacity and duration', () => {
 });
 
 test('encodes omitted block_ttl as the exhaustion-only sentinel', () => {
-	const limiter = new RedisXLimiter(redisClient, options);
+	const limiterOptions = createOptions();
+	const limiter = new RedisXLimiter(redisClient, limiterOptions);
 
-	expect(limiter._redis_args).toEqual(['0', 'validation', '2', '10', '-1']);
+	expect(limiter._redis_args).toEqual([
+		'0',
+		limiterOptions.name,
+		'2',
+		'10',
+		'-1',
+	]);
 });
 
 test.each([1, 60, 2_147_483_647])(
 	'preserves supported block_ttl setting %s',
 	(block_ttl) => {
+		const limiterOptions = createOptions();
 		const limiter = new RedisXLimiter(redisClient, {
-			...options,
+			...limiterOptions,
 			limit: 1,
 			ttl: 1,
 			block_ttl,
@@ -79,7 +98,7 @@ test.each([1, 60, 2_147_483_647])(
 
 		expect(limiter._redis_args).toEqual([
 			'0',
-			'validation',
+			limiterOptions.name,
 			'1',
 			'1',
 			String(block_ttl),
