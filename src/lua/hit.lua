@@ -49,6 +49,34 @@ for _, limiter in ipairs(limiters) do
 				"HINCRBY", limiter.key, limiting_key, 1,
 			})
 		end
+	-- ---------------------------------------------------
+	-- sliding window
+	-- ---------------------------------------------------
+	elseif limiter.type == "2" then
+		-- wipe expired
+		redis.call("ZREMRANGEBYSCORE", limiter.key, "-inf", ts)
+		local is_unique = redis.call('ZSCORE', limiter.key, hit_id) == false
+		local ts_expire = ts + limiter.ttl
+		-- proceed only if hit_id is unique
+		if
+			is_unique
+			and redis.call("ZCARD", limiter.key) >= limiter.limit
+		then
+			if set_block(limiter) ~= true then
+				local resp_score = redis.call("ZRANGE", limiter.key, "-inf", "+inf", "BYSCORE", "LIMIT", 0, 1, "WITHSCORES")[2]
+				table.insert(limiters_blocked, {
+					limiter.name,
+					tonumber(resp_score) - ts
+				})
+			end
+		else
+			table.insert(hit_args, {
+				"ZADD", limiter.key, ts_expire, hit_id,
+			})
+			table.insert(hit_args, {
+				"EXPIREAT", limiter.key, ts_expire,
+			})
+		end
 	else
 		return redis.error_reply("UNSUP unsupported limiter type " .. limiter.type)
 	end

@@ -28,7 +28,7 @@ A fresh random hit ID for each recorded event enables ordinary hit counting in t
 - Support the fixed-window, sliding-window, approximate sliding-window, and token-bucket variations discussed in [Visualizing algorithms for rate limiting](https://smudge.ai/blog/ratelimit-algorithms).
 - A motivating use case is failed authentication: limiter name identifies the rule, limiting ID is the source IP, and hit ID is the attempted username. Repeated failed attempts for one username count as one distinct username while it remains active. A configured threshold controls when an IP-wide authentication block is triggered; the user's proposed block-on-exceed policy is recorded below.
 - The latest user proposal restricts distinct-value counting to the exact sliding-window limiter. Earlier discussion of unique-value fixed windows, approximate windows, or token buckets is not part of the current proposed scope.
-- The user accepted sorted sets for exact sliding-window storage on 2026-10-19. The other algorithms retain the proposed Redis hashes with expiring fields. Blocks use the separately accepted uniform hash described below; repeat-hit behavior and some blocking lifecycle details remain open.
+- The user accepted sorted sets for exact sliding-window storage on 2026-10-19. The other algorithms retain the proposed Redis hashes with expiring fields. Blocks use the separately accepted uniform hash described below. Repeated hits refresh their deadlines, as accepted on 2026-10-20; some blocking lifecycle details remain open.
 
 ## Execution architecture: user decisions
 
@@ -73,7 +73,7 @@ This section records the proposed layout. It does not claim that all command-lev
 - The user accepted a sorted set per named limiter and limiting ID, superseding the original hash-per-subject proposal.
 - Each hit ID is a sorted-set member. The reviewed representation uses its score as an absolute deadline and counts active scores rather than relying on physical expiration cleanup.
 - Repeated use of a hit ID must not add another distinct entry while that ID is active.
-- Whether repeats refresh the member's deadline remains unresolved; last-seen semantics is the assistant recommendation.
+- Accepted on 2026-10-20: each accepted repeated hit refreshes the member's deadline to the captured current time plus the window length, without increasing cardinality. An active ID can therefore be refreshed even when unique capacity is exhausted. Existing blocks still deny access, and a rejected batch does not apply queued refreshes.
 
 ### Approximate sliding window
 
@@ -192,7 +192,7 @@ Status: the user requested a review of other logic/design flaws and an explanati
 ### Findings and semantic decisions
 
 - A block's deadline must be independent of the counting window or bucket-full deadline. The user selected a separate uniform block hash. Replacement was technically possible but is not the chosen design. The intended CAPTCHA flow resumes with fresh usage; cleanup timing and exact per-algorithm reset semantics remain to be specified.
-- For a true count of distinct IDs seen during the preceding window, each repeated ID must refresh its last-seen time/deadline. Keeping only the first occurrence's deadline implements a different policy: deduplication for a fixed period after first observation. Example: with a ten-minute window, an ID hit at minute 0 and again at minute 9 must still count at minute 11 under last-seen semantics. The user has not selected repeat behavior.
+- For a true count of distinct IDs seen during the preceding window, each repeated ID must refresh its last-seen time/deadline. Keeping only the first occurrence's deadline implements a different policy: deduplication for a fixed period after first observation. Example: with a ten-minute window, an ID hit at minute 0 and again at minute 9 must still count at minute 11 under last-seen semantics. The user subsequently selected deadline refresh on repeated hits on 2026-10-20.
 - Capacity checks for distinct values must account for the incoming hit IDs. An already-active ID costs zero additional distinct capacity; a new or expired ID costs one. Deduplicate repeated IDs within a single call. An explicit block can still reject every hit regardless of its incremental cost. Public check inputs and threshold semantics remain undecided.
 - A caller-defined hit ID used for resource deduplication is not automatically an idempotency key for the whole batch. Other counters might still increment and the sliding deadline might refresh. Fresh generated IDs should be sufficiently unique; timestamps alone can collide for separate hits occurring at the same instant.
 - Batch mutation policy is still essential: admission may require checking every limiter before consuming any quota, while recording an observed failure may require updating every applicable limiter even if one triggers a block. Validate/coalesce or reject duplicate entries for the same limiter and limiting ID so that independently evaluated entries cannot overconsume shared capacity.
@@ -216,7 +216,7 @@ A sorted-set member has no native individual TTL in this design. Its score expre
 - A hit is active when its score is strictly greater than the captured current time. A score equal to now is inactive. Keep this boundary consistent in both entry points.
 - Read-only check: count active scores using ZCOUNT. Expired members awaiting cleanup cannot inflate this count, and the check need not delete anything or extend expiration.
 - During the hit's mutation phase, remove scores at or before now with ZREMRANGEBYSCORE and add/update recorded members with ZADD.
-- For the proposed last-seen semantics, update a repeated member's score to now plus the window length. Membership remains unique while its deadline advances.
+- For the last-seen semantics accepted on 2026-10-20, update an accepted repeated member's score to now plus the window length. Membership remains unique while its deadline advances.
 - Fresh random hit IDs count ordinary events; stable resource/username IDs count distinct values. Different members may share an identical score without being merged.
 - Set the whole key's expiration no earlier than the maximum remaining member deadline. This removes idle state after all members become irrelevant. Keep a longer block independently alive.
 - Use the same shared batch executor and captured time as the other algorithms. Choosing a different Redis data type does not require another public execution path.
@@ -225,7 +225,7 @@ A sorted-set member has no native individual TTL in this design. Its score expre
 
 References: [ZADD](https://redis.io/docs/latest/commands/zadd/), [ZCOUNT](https://redis.io/docs/latest/commands/zcount/), and [ZREMRANGEBYSCORE](https://redis.io/docs/latest/commands/zremrangebyscore/).
 
-The user accepted sorted-set storage and the separate uniform block hash on 2026-10-19. Repeat-hit semantics, batch policies, and some block lifecycle details remain open.
+The user accepted sorted-set storage and the separate uniform block hash on 2026-10-19, then accepted deadline refresh on repeated hits on 2026-10-20. Some batch policies and block lifecycle details remain open.
 
 ## Blocking-storage comparison and follow-up (2026-10-19)
 
@@ -406,3 +406,32 @@ The user added a module-level `LIMITER_NAMES` set and asked for a review. Implem
 - Added a fixture factory that gives every constructor attempt a distinct `validation-N` name, including invalid-input cases. Argument-serialization assertions use the name from that case's fixture.
 - The module-wide name registry and limiter implementation are unchanged.
 - Validation: all nine options tests pass under both Vitest and Bun. ESLint, Oxlint, Biome, and whitespace checks pass for the fixture update.
+
+## Sliding-window implementation review (2026-10-20)
+
+The user requested a review, then updated the missing-member check during the review. Implementation was not changed by the assistant.
+
+- The initial comparison of ZSCORE's missing-member reply with nil would skip new hits because Redis's default Lua response mapping uses false. The user changed the comparison to false; the tested version correctly records new unique IDs.
+- Confirmed expiration bug: `ts_expire` is an absolute Unix timestamp, but the queued command is EXPIRE, which expects a relative duration. A 60-second window produced a key TTL of 1,792,518,054 seconds. Use EXPIREAT with this deadline. Logical member cleanup still works, but idle subject keys otherwise remain for decades.
+- Confirmed response bug: the exhaustion-only branch returns the first member's score directly. That is an absolute timestamp string, whereas fixed-window and explicit-block results return remaining seconds as numbers. The same test returned `"1792518054"` instead of approximately 60. Convert the score to a number and subtract the captured ts.
+- At the initial review, repeat-ID semantics were undecided and the code left an active member's deadline unchanged: a repeat with 20 seconds remaining still had 20 seconds remaining under a 60-second configuration. The user subsequently accepted and implemented refresh behavior, as recorded below.
+- Passing controls on the updated script: two distinct IDs accepted at limit 2; a third rejected without increasing cardinality; an existing ID allowed at capacity when unblocked; explicit block creation and rejection of repeated IDs during the block; cleanup of scores at or before the captured timestamp; and no new sliding hit recorded when a fixed limiter rejects a mixed batch, in either order.
+- Cleanup before the batch decision removes only logically expired members and does not consume quota. No new partial-consumption issue was found in these scenarios.
+- Verification used the actual composed Lua script and unique temporary keys on local Redis, with only those keys deleted afterward. No FLUSHDB helper was used. Standalone TypeScript checking passed.
+
+References: [Redis Lua response conversion](https://redis.io/docs/latest/develop/programmability/lua-api/), [EXPIRE](https://redis.io/docs/latest/commands/expire/), [EXPIREAT](https://redis.io/docs/latest/commands/expireat/), and [ZRANGE](https://redis.io/docs/latest/commands/zrange/).
+
+### Sliding-window deadline follow-up
+
+- The user changed the key expiration command to EXPIREAT, correctly matching the absolute `ts_expire` value.
+- The exhaustion calculation was changed to `ts - score`, which reverses the required subtraction and produces a negative duration for an active member. Remaining TTL must be `tonumber(score) - ts`.
+- This follow-up was verified by inspecting the updated source; implementation was not changed.
+
+### Accepted repeat refresh and verified deadline fixes
+
+- The user explicitly selected extending expiration on repeated hits and updated the implementation. This establishes last-seen semantics for accepted sliding-window hits.
+- Confirmed `tonumber(resp_score) - ts` now returns a positive numeric remaining TTL. A fresh 60-second window returned 60 seconds on exhaustion, and EXPIREAT gave its key the intended expiration.
+- Confirmed a repeat at capacity refreshes both the member score and key expiration to now plus the window length without adding a member or creating a block. The tested member had 20 seconds remaining before the refresh and 60 afterward.
+- Active explicit blocks prevent refresh. If another limiter rejects a batch, neither the repeated member's deadline nor its key expiration changes; verified in both limiter orders.
+- Once an ID expires, attempting it again costs new unique capacity. Verified rejection when another active member already filled that capacity.
+- Tested the actual updated Lua on local Redis using unique temporary keys and removed only those keys. No implementation files were changed by the assistant.
