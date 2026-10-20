@@ -344,3 +344,22 @@ Constructor validation implemented for the current Redis numeric arguments:
 Regression coverage uses a disconnected client for constructor checks and isolated, uniquely named Redis keys for Lua scenarios. Lua checks cover one-second windows, exact boundaries, in-window hits, and unchanged first-hit window deadlines. The integration tests delete only their own keys and do not import the existing FLUSHDB helper.
 
 Validation: all 15 targeted tests passed under Bun (57 assertions), including the Redis integration scenarios. TypeScript, ESLint, Oxlint, and Biome checks passed for the changes. In-memory tsdown builds emitted ESM/CommonJS and declarations without modifying distribution files. Vitest could not start because the installed Vite package does not export `./module-runner`; dependency changes were left outside this fix.
+
+## Vitest diagnosis (2026-10-20)
+
+The user asked why Vitest cannot test the code and how to fix it. This investigation did not change implementation, dependencies, or saved test configuration.
+
+- The earlier `vite/module-runner` startup error no longer reproduces with the current installation: Vitest 5.0.3 and Vite 8.3.4. The installed Vite now exports that entry point.
+- The current failure occurs while importing `src/lua/hit.lua`: Vite parses its Lua source as JavaScript and fails on `local function`. The constructor tests therefore never start.
+- The tsdown text loader only applies to tsdown builds. Vitest loads source through Vite and reads Vite/Vitest configuration, not `tsdown.config.ts`. The TypeScript module declaration supplies types only; the current Vite pipeline does not turn these `.lua` imports into strings based on the import attribute.
+- Recommended fix: add a `vitest.config.ts` with a small Vite plugin that loads `.lua` files as JavaScript modules exporting their UTF-8 contents as strings. This preserves the current source imports and does not require another package.
+- Verified the recommendation by supplying the loader through Vitest's programmatic API in memory. All nine constructor tests passed under Vitest. No Redis integration tests or the FLUSHDB helper were run.
+
+References: [Vitest configuration](https://vitest.dev/config/) and [Vite plugin API](https://vite.dev/guide/api-plugin).
+
+### Authorized Vitest Lua loader
+
+- The user approved implementing the proposed configuration.
+- Added `vitest.config.ts` with an inline `lua-text` Vite plugin. Its pre-load hook reads `.lua` files as UTF-8 and exports their contents as a JavaScript string using JSON encoding.
+- Existing Lua imports, limiter logic, tsdown configuration, dependencies, and test selection remain unchanged. Vitest discovers this configuration automatically.
+- Verification: `npm run test:vitest -- src/main/options.test.ts` passes all nine constructor tests using the saved configuration. TypeScript and config lint/format checks pass. The Redis integration test that imports the FLUSHDB helper was not run for this configuration change.
