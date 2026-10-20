@@ -59,7 +59,7 @@ This section records the proposed layout. It does not claim that all command-lev
 | Fixed window (hash) | Named limiter | Hash field: limiting ID | Usage representation not explicitly selected | Field expires at counting-window deadline |
 | Exact sliding window (sorted set, accepted) | Named limiter and limiting ID | Member: hit ID | Proposed score: individual hit's absolute deadline | Score gives logical expiration; whole-key expiration can clean up idle state |
 | Approximate sliding window (hash) | Named limiter | Hash field: window/epoch ID and limiting ID | Per-window usage representation not explicitly selected | Retain field for two window lengths so the previous window remains available |
-| Token bucket (hash) | Named limiter, subject to the wording clarification below | Hash field: limiting ID | Remaining token count | Field expires when the bucket would become full without further hits |
+| Token bucket (hash) | Named limiter | Hash field: limiting ID | Integer cumulative hit counter, rebased by whole capacities | Field expires at the first whole second when the bucket would be full without further hits |
 
 ### Fixed window
 
@@ -84,11 +84,13 @@ This section records the proposed layout. It does not claim that all command-lev
 
 ### Token bucket
 
-- Store remaining tokens in the limiting ID's field.
-- Set the field's expiration to the instant when the bucket would be full if no further hits occurred.
-- The user's intended design uses this expiration timestamp, current time, and the limiter's parameters to calculate the current remaining tokens.
-- The original description says "hash field contains limiter id; field contains limiting id." The table interprets the first phrase as the hash key containing the named limiter's identifier. Confirm that interpretation before implementation.
-- Continuous versus discrete refill, rounding, the precise role of the stored token value, and behavior when capacity/refill settings change are not yet defined.
+- Latest user decision: use integer hash values and adjust expiration, superseding the fractional used-token snapshots. One field per limiting ID stores a cumulative integer hit count; its expiration preserves refill progress.
+- The implementation uses `limit` as capacity and `ttl` as the time to refill an empty bucket: refill rate is `limit / ttl` tokens per second. Fractional refill is represented through the counter and cumulative deadline calculation using the existing whole-second script clock.
+- Recover a reference time from the count and full-refill deadline, increment the count, and round the cumulative refill duration once. The reference time is implicit; it does not need another field.
+- Rebase the count by whole capacities and advance the reference time by the corresponding refill duration. This preserves refill progress and keeps stored counts between 1 and capacity. The reference time may be in the future, and the stored counter alone is not current outstanding usage.
+- A candidate hit fits when its proposed full-refill deadline is at or before `ts + ttl`. Otherwise the excess seconds are its quota-recovery delay.
+- Missing fields and fully refilled buckets have full capacity. Rejected hits do not update usage or extend its deadline. Existing block handling and deferred batch writes apply.
+- Existing state assumes unchanged capacity and refill configuration. Clear the field before changing those parameters; migration across different configurations is not implemented.
 
 ## Blocking: user decisions
 
@@ -481,3 +483,37 @@ References: [two-window weighting](https://smudge.ai/blog/ratelimit-algorithms) 
 - Added `src/lua/approximate-window.test.ts` with deterministic script timestamps and isolated Redis keys. The tests assert rejection one second before the returned delay and acceptance at that delay, without recording rejected hits or creating blocks in exhaustion-only mode.
 - Coverage includes fractional and exact recovery, recovery at and after rollover, empty current windows, limit 1, one-second windows, counts above a reduced limit, exact-fit precision, and unchanged explicit-block reporting.
 - Validation: all 13 tests passed under both Vitest and Bun (59 assertions under Bun). TypeScript, ESLint, Oxlint, Biome, and whitespace checks passed. The existing FLUSHDB test helper was not run.
+
+## Authorized token-bucket implementation (2026-10-20)
+
+- The user requested implementing token buckets in the same style as the other limiter branches, explicitly choosing one field containing used tokens and an expiration representing full refill. This supersedes the earlier stored-remaining-tokens proposal.
+- Added type 4 handling to hit.lua. It reads HGET and HEXPIRETIME, checks capacity, uses the existing set_block helper or returns whole-second quota recovery time, and queues HSET plus HEXPIREAT only for an accepted batch. No extra metadata fields or keys are needed.
+- Let L be capacity, W the full-refill duration, U the stored used-token count, and F the absolute field deadline. In the existing integer-second clock, the previous write time is `F - ceil(U * W / L)`. Current usage is `max(0, U - elapsed * L / W)`, and available tokens are L minus that usage. An accepted hit adds one token of usage and sets the new deadline to `ts + ceil(newUsage * W / L)`.
+- Internally, refill arithmetic scales usage by W so elapsed whole seconds subtract integral multiples of L. Round the deserialized scaled usage back to an integer to prevent accumulated floating-point drift at exact-fit boundaries. Store the actual token count, not the scaled value, using 17 significant digits.
+- Preserve the stored count when no time has elapsed, and compare admission in token units so large scaled values cannot hide the cost of another hit. Exhaustion-only delays are rounded upward and are at least one second.
+- A capacity of 10 with ttl 60 refills one token every six seconds. One accepted hit from full capacity expires after six seconds; consuming all ten tokens produces a 60-second full-refill deadline.
+- Added 22 Redis regression tests covering bursts, fractional refill and expiration rounding, exact retry boundaries, full refill after idle, refill rates above and below one token per second, repeated traffic against a reference model, independent limiting IDs, explicit blocks, rejected and accepted mixed batches in both orders, actual Redis TIME/expiration, and maximum supported capacity/duration boundaries.
+- Validation: all 35 targeted token-bucket and approximate-window tests passed in both Vitest and Bun (1,757 assertions under Bun). TypeScript, ESLint, Oxlint, Biome, and whitespace checks passed. Tests used isolated temporary keys and deleted only those keys; the existing FLUSHDB test helper was not run.
+
+### Integer token-counter alternative under discussion
+
+- The user questioned storing fractional usage and proposed adjusting the field expiration instead. This is a design discussion; no implementation change is authorized by the question alone.
+- The current fractional value is an implementation choice: it snapshots outstanding used tokens after refill, keeping the stored count at or below capacity. Fractional storage is not required by the token-bucket algorithm.
+- An alternative integer value N can count accepted hits since a refill anchor A. For capacity L and refill duration W, store the full-refill deadline `F = A + ceil(N * W / L)`. The integer-second anchor can be recovered from the field value and deadline as `A = F - ceil(N * W / L)`.
+- Current outstanding usage is `max(0, N - (ts - A) * L / W)`. If another hit fits, increment N and recompute the deadline from A and the cumulative count. Reset the count/anchor once fully refilled.
+- Round the cumulative refill duration, not every individual extension. With three tokens per ten seconds, three simultaneous hits have deadlines at offsets 4, 7, and 10 seconds; repeatedly adding ceil(10/3) would instead produce 4, 8, and 12 and distort admission/refill.
+- A continuously active bucket needs periodic rebasing to prevent its cumulative counter growing indefinitely. Advancing the anchor by whole refill periods and subtracting the corresponding whole capacities preserves the same state. This is additional bookkeeping compared with the current bounded usage snapshot.
+- A sufficiently precise full-refill deadline can also represent the bucket without a meaningful field value. With second-resolution expiration alone, arbitrary fractional token intervals need a retained remainder or explicit quantization policy.
+- The user subsequently accepted this representation; the authorized implementation is recorded below.
+
+### Authorized integer counter and cumulative expiration
+
+- The user explicitly requested switching hash values to integers and adjusting TTL.
+- Replaced fractional usage snapshots in the token-bucket branch with the integer counter and implicit reference time. With counter N, capacity L, duration W, and stored deadline F, recover `A = F - ceil(N * W / L)`. Missing or fully refilled state starts at N=0 and A=ts.
+- Before incrementing a counter equal to L, replace it with zero and advance A by W. This rebasing preserves the state, prevents unbounded counter growth, and avoids incrementing beyond the supported safe-integer capacity.
+- For the proposed hit, increment N and calculate `F_next = A + ceil(N * W / L)`. Accept when `F_next <= ts + W`; otherwise return `F_next - ts - W` seconds in exhaustion-only mode, or use the existing explicit-block helper.
+- Accepted batches queue HSET with a decimal integer string and HEXPIREAT with F_next. Rejected operations do not apply counter increments, rebasing, or expiration changes.
+- Fractional token usage is no longer stored. Full refill, admission, and retry behavior remain equivalent under the integer-second clock, with cumulative rounding rather than per-hit duration rounding.
+- Added regression assertions that stored values are decimal integers bounded by capacity, explicit 4/7/10-second cumulative deadlines for three tokens per ten seconds, and 300 accepted hits across repeated rebasing cycles with rejection one second before every retry.
+- Validation: all 37 targeted Lua tests passed under Vitest and Bun (3,309 assertions under Bun); TypeScript, ESLint, Oxlint, Biome, and whitespace checks passed. The tests used isolated Redis keys and did not run the FLUSHDB helper.
+- Existing fractional snapshot fields must expire or be cleared before using this representation. Automatic migration of the prototype's fractional state is not implemented, and existing Redis data was not modified by this change.

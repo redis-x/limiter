@@ -127,6 +127,46 @@ for _, limiter in ipairs(limiters) do
 				"HINCRBY", limiter.key, field_current, 1,
 			})
 		end
+	-- ---------------------------------------------------
+	-- token bucket
+	-- ---------------------------------------------------
+	elseif limiter.type == "4" then
+		local value = redis.call("HGET", limiter.key, limiting_key)
+		local counter = tonumber(value) or 0
+		local ts_anchor = ts
+		if counter > 0 then
+			local ts_expire = redis.call("HEXPIRETIME", limiter.key, "FIELDS", 1, limiting_key)[1]
+			if ts_expire > ts then
+				ts_anchor = ts_expire - math.ceil(counter * limiter.ttl / limiter.limit)
+			else
+				counter = 0
+			end
+		end
+
+		-- Rebase by one capacity without changing the represented refill progress.
+		if counter == limiter.limit then
+			counter = 0
+			ts_anchor = ts_anchor + limiter.ttl
+		end
+		counter = counter + 1
+		-- Round the cumulative duration, not each individual token's refill time.
+		local ts_expire = ts_anchor + math.ceil(counter * limiter.ttl / limiter.limit)
+		local ttl_retry = ts_expire - ts - limiter.ttl
+		if ttl_retry > 0 then
+			if set_block(limiter) ~= true then
+				table.insert(limiters_blocked, {
+					limiter.name,
+					ttl_retry
+				})
+			end
+		else
+			table.insert(hit_args, {
+				"HSET", limiter.key, limiting_key, string.format("%.0f", counter),
+			})
+			table.insert(hit_args, {
+				"HEXPIREAT", limiter.key, ts_expire, "FIELDS", 1, limiting_key,
+			})
+		end
 	else
 		return redis.error_reply("UNSUP unsupported limiter type " .. limiter.type)
 	end
