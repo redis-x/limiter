@@ -1,12 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { createClient } from 'redis';
 import { afterAll, beforeAll, expect, test } from 'vitest';
+import { redisXClient } from '../../test/redis.js';
 import lua_hit from './hit.lua' with { type: 'text' };
 import lua_prepare from './prepare.lua' with { type: 'text' };
 
-const client = createClient({
-	socket: { host: '127.0.0.1', port: 16379, reconnectStrategy: false },
-});
 const prefix = `approximate-window-test-${randomUUID()}`;
 const ownedKeys = new Set<string>();
 let timestamp: number;
@@ -20,27 +17,23 @@ interface WindowState {
 }
 
 beforeAll(async () => {
-	await client.connect();
-	const time = await client.sendCommand(['TIME']);
+	const time = (await redisXClient.sendCommand('TIME')) as string[];
 	timestamp = Number(time[0]);
 });
 
 afterAll(async () => {
-	if (client.isOpen) {
-		try {
-			if (ownedKeys.size > 0) {
-				await client.del([...ownedKeys]);
-			}
-		} finally {
-			await client.quit();
-		}
+	if (ownedKeys.size > 0) {
+		await redisXClient.DEL([...ownedKeys]);
 	}
 });
 
 /** Seeds isolated counters with a deterministic script clock. */
 async function createState(options: WindowState) {
 	const name = randomUUID();
-	const keys = [`${prefix}:${name}:blocks`, `${prefix}:${name}:usage`];
+	const keys: [string, string] = [
+		`${prefix}:${name}:blocks`,
+		`${prefix}:${name}:usage`,
+	];
 	for (const key of keys) {
 		ownedKeys.add(key);
 	}
@@ -57,7 +50,7 @@ async function createState(options: WindowState) {
 	}
 
 	if (Object.keys(fields).length > 0) {
-		await client.hSet(keys[1], fields);
+		await redisXClient.HSET(keys[1], fields);
 	}
 
 	return {
@@ -74,20 +67,18 @@ function hit(
 	offset = 0,
 	block = -1,
 ) {
-	return client.eval(
+	return redisXClient.EVAL(
 		[`local ts = ${state.timestamp + offset}`, lua_prepare, lua_hit].join('\n'),
-		{
-			keys: state.keys,
-			arguments: [
-				'subject',
-				'hit',
-				'3',
-				state.name,
-				String(state.limit),
-				String(state.window),
-				String(block),
-			],
-		},
+		state.keys,
+		[
+			'subject',
+			'hit',
+			'3',
+			state.name,
+			String(state.limit),
+			String(state.window),
+			String(block),
+		],
 	);
 }
 
@@ -193,12 +184,12 @@ test.each([
 	},
 ])('returns the earliest whole-second retry for $name', async (options) => {
 	const state = await createState(options);
-	const usageBefore = await client.hGetAll(state.keys[1]);
+	const usageBefore = await redisXClient.HGETALL(state.keys[1]);
 
 	expect(await hit(state)).toEqual([1, [[state.name, options.delay]]]);
 	expect(await hit(state, options.delay - 1)).toEqual([1, [[state.name, 1]]]);
-	expect(await client.hGetAll(state.keys[1])).toEqual(usageBefore);
-	expect(await client.exists(state.keys[0])).toBe(0);
+	expect(await redisXClient.HGETALL(state.keys[1])).toEqual(usageBefore);
+	expect(await redisXClient.EXISTS(state.keys[0])).toBe(0);
 	expect(await hit(state, options.delay)).toBeNull();
 });
 
@@ -222,17 +213,17 @@ test('reports the configured block duration when blocking is enabled', async () 
 		current: 10,
 		limit: 10,
 	});
-	const usageBefore = await client.hGetAll(state.keys[1]);
+	const usageBefore = await redisXClient.HGETALL(state.keys[1]);
 
 	expect(await hit(state, 0, 30)).toEqual([1, [[state.name, 30]]]);
-	expect(await client.hGetAll(state.keys[1])).toEqual(usageBefore);
+	expect(await redisXClient.HGETALL(state.keys[1])).toEqual(usageBefore);
 	expect(
-		await client.sendCommand([
+		await redisXClient.sendCommand(
 			'HEXPIRETIME',
 			state.keys[0],
 			'FIELDS',
 			'1',
 			`${state.name}:subject`,
-		]),
+		),
 	).toEqual([state.timestamp + 30]);
 });

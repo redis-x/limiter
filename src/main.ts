@@ -1,5 +1,6 @@
-import { hit } from './scripts.js';
-import { REDIS_PREFIX, type RedisClient } from './utils.js';
+import type { RedisXClient, RedisXScript } from '@redis-x/client';
+import { createScripts, hit, type RedisXLimiterScripts } from './scripts.js';
+import { REDIS_PREFIX } from './utils.js';
 
 export enum RedisXLimiterType {
 	FixedWindow = '0',
@@ -20,13 +21,13 @@ export class RedisXLimiter {
 	readonly priority: number = Number.MAX_SAFE_INTEGER;
 	/** @internal */
 	// eslint-disable-next-line unicorn/prefer-private-class-fields
-	_redisClient: RedisClient;
+	_scripts: RedisXLimiterScripts;
 	/** @internal */
 	// eslint-disable-next-line unicorn/prefer-private-class-fields
 	_redis_args: string[];
 
 	constructor(
-		redisClient: RedisClient,
+		redisXClient: RedisXClient,
 		options: {
 			type: RedisXLimiterType;
 			name: string;
@@ -80,7 +81,7 @@ export class RedisXLimiter {
 			this.priority = options.priority;
 		}
 
-		this._redisClient = redisClient;
+		this._scripts = createScripts(redisXClient);
 
 		this._redis_args = [
 			options.type,
@@ -113,7 +114,7 @@ export class RedisXLimiter {
 		}
 
 		await hit(
-			this._redisClient,
+			this._scripts.hit,
 			key,
 			hit_id,
 			[this._getRedisKey(key)],
@@ -124,21 +125,21 @@ export class RedisXLimiter {
 
 export class RedisXLimitersBatch {
 	#limiters: RedisXLimiter[];
-	#redisClient: RedisClient;
+	#scripts: RedisXLimiterScripts;
 	#redis_args: string[] = [];
 
 	constructor(...limiters: RedisXLimiter[]) {
 		this.#limiters = [...new Set(limiters)];
 
-		const redisClient = this.#limiters[0]?._redisClient;
-		if (redisClient === undefined) {
+		const scripts = this.#limiters[0]?._scripts;
+		if (scripts === undefined) {
 			throw new TypeError('At least one limiter is required.');
 		}
 
-		this.#redisClient = redisClient;
+		this.#scripts = scripts;
 
 		for (const limiter of this.#limiters) {
-			if (limiter._redisClient !== this.#redisClient) {
+			if (limiter._scripts !== this.#scripts) {
 				throw new Error('All limiters must use the same Redis client.');
 			}
 
@@ -148,7 +149,7 @@ export class RedisXLimitersBatch {
 
 	async hit(key: string, hit_id?: string): Promise<void> {
 		await hit(
-			this.#redisClient,
+			this.#scripts.hit,
 			key,
 			hit_id,
 			this.#limiters.map((limiter) => limiter._getRedisKey(key)),

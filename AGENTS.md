@@ -1,6 +1,6 @@
 # Limiter redesign: agent instructions and design record
 
-Last updated: 2026-10-20.
+Last updated: 2026-10-21.
 
 ## Working agreement
 
@@ -9,6 +9,7 @@ Last updated: 2026-10-20.
 - Distinguish user decisions and proposals from assistant recommendations, technical findings, and unresolved questions. Do not turn an assistant suggestion into an accepted requirement without user agreement.
 - Treat this as the intended new design, not documentation of behavior already implemented. Preserve unrelated existing work.
 - Prefer the latest explicit user decision when it supersedes an earlier discussion.
+- Tests must import and use the shared `redisXClient` from `test/redis.ts`. Create additional clients only when the test specifically exercises behavior involving different clients. Individual suites must not connect or disconnect the shared instance.
 
 ## Terminology
 
@@ -517,3 +518,12 @@ References: [two-window weighting](https://smudge.ai/blog/ratelimit-algorithms) 
 - Added regression assertions that stored values are decimal integers bounded by capacity, explicit 4/7/10-second cumulative deadlines for three tokens per ten seconds, and 300 accepted hits across repeated rebasing cycles with rejection one second before every retry.
 - Validation: all 37 targeted Lua tests passed under Vitest and Bun (3,309 assertions under Bun); TypeScript, ESLint, Oxlint, Biome, and whitespace checks passed. The tests used isolated Redis keys and did not run the FLUSHDB helper.
 - Existing fractional snapshot fields must expire or be cleared before using this representation. Automatic migration of the prototype's fractional state is not implemented, and existing Redis data was not modified by this change.
+
+## Shared RedisX test-client migration (2026-10-21)
+
+- The user requested migrating all tests to the shared redisXClient exported by test/redis.ts, allowing additional clients only for explicit different-client behavior tests.
+- Updated the main smoke test, constructor-option tests, and both Lua integration suites to import that instance. Removed test-local createClient calls and connection/disconnection hooks.
+- Adapted command calls to RedisXClient's uppercase methods and its EVAL(script, keys, args) signature. Commands without dedicated wrappers use sendCommand(command, ...args), with typed raw replies where needed.
+- Lua suites retain unique key namespaces and delete their own keys after completion without closing the shared connection. The shared fixture owns client initialization and its existing database reset.
+- Before running the shared fixture, verified its destination was the dedicated test-redis container on port 16379 and database 0 was empty. The test runs used the fixture's existing FLUSHDB behavior; the fixture itself was not changed by this migration.
+- All 47 tests passed under both Vitest and Bun (3,346 assertions under Bun). TypeScript, ESLint, Oxlint, Biome, and whitespace checks passed. Constructor tests now use the same RedisX client as integration tests; no current test needs a separate client.

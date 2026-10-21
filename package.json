@@ -20,11 +20,9 @@
 		"node": ">=16.0.0"
 	},
 	"dependencies": {
+		"@redis-x/client": "file:/tmp/devpack/github/@redis-x/client/pack-be7f55c.tar.gz",
 		"nanoid": "6.0.2",
 		"valibot": "1.5.0"
-	},
-	"peerDependencies": {
-		"redis": "^4.6.0"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.4",
@@ -33,10 +31,14 @@
 		"eslint": "10.7.0",
 		"oxlint": "1.74.0",
 		"publint": "0.3.25",
+		"redis": "4.6.0",
 		"tsdown": "0.23.0",
 		"typescript": "6.0.3",
 		"unplugin-unused": "0.6.0",
 		"vitest": "5.0.3"
+	},
+	"_devpack": {
+		"@redis-x/client": "../client"
 	},
 	"scripts": {
 		"build": "tsdown src/main.ts --format esm --format cjs --dts --publint --unused",

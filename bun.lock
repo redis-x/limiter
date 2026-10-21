@@ -5,6 +5,7 @@
     "": {
       "name": "@redis-x/limiter",
       "dependencies": {
+        "@redis-x/client": "file:/tmp/devpack/github/@redis-x/client/pack-be7f55c.tar.gz",
         "nanoid": "6.0.2",
         "valibot": "1.5.0",
       },
@@ -15,13 +16,11 @@
         "eslint": "10.7.0",
         "oxlint": "1.74.0",
         "publint": "0.3.25",
+        "redis": "4.6.0",
         "tsdown": "0.23.0",
         "typescript": "6.0.3",
         "unplugin-unused": "0.6.0",
         "vitest": "5.0.3",
-      },
-      "peerDependencies": {
-        "redis": "^4.6.0",
       },
     },
   },
@@ -130,17 +129,19 @@
 
     "@quansync/fs": ["@quansync/fs@1.1.0", "", { "dependencies": { "quansync": "^1.0.0" } }, "sha512-qAPG/t3HqML1TlN7sY/pTbEjzFVAKsMjNNMGheyDosro+kT4iw2KCUoHcVdmliwWjorm4elZbgNQyU2eD97eDg=="],
 
+    "@redis-x/client": ["@redis-x/client@/tmp/devpack/github/@redis-x/client/pack-be7f55c.tar.gz", { "peerDependencies": { "redis": "^4.6" } }, "sha512-jyqArDX0SGsWyW1Sq99b2IYyrUe2KSsW0GL8qzglTpctQNsCQqgJw3spJCoqA3Ns2pb3atNAmYEUkfwlotn/JA=="],
+
     "@redis/bloom": ["@redis/bloom@1.2.0", "", { "peerDependencies": { "@redis/client": "^1.0.0" } }, "sha512-HG2DFjYKbpNmVXsa0keLHp/3leGJz1mjh09f2RLGGLQZzSHpkmZWuwJbAvo3QcRY8p80m5+ZdXZdYOSBLlp7Cg=="],
 
-    "@redis/client": ["@redis/client@1.6.1", "", { "dependencies": { "cluster-key-slot": "1.1.2", "generic-pool": "3.9.0", "yallist": "4.0.0" } }, "sha512-/KCsg3xSlR+nCK8/8ZYSknYxvXHwubJrU82F3Lm1Fp6789VQ0/3RJKfsmRXjqfaTA++23CvC3hqmqe/2GEt6Kw=="],
+    "@redis/client": ["@redis/client@1.5.0", "", { "dependencies": { "cluster-key-slot": "1.1.2", "generic-pool": "3.9.0", "yallist": "4.0.0" } }, "sha512-MafrVNQ5LSnii1yYIlzjbz3i6Bw8c9RZkV3g7jNd3As/A1vo6UIn0+29ii631oKxIA+nAEMeACh6+9k9+iup1A=="],
 
-    "@redis/graph": ["@redis/graph@1.1.1", "", { "peerDependencies": { "@redis/client": "^1.0.0" } }, "sha512-FEMTcTHZozZciLRl6GiiIB4zGm5z5F3F6a6FZCyrfxdKOhFlGkiAqlexWMBzCi4DcRoyiOsuLfW+cjlGWyExOw=="],
+    "@redis/graph": ["@redis/graph@1.1.0", "", { "peerDependencies": { "@redis/client": "^1.0.0" } }, "sha512-16yZWngxyXPd+MJxeSr0dqh2AIOi8j9yXKcKCwVaKDbH3HTuETpDVPcLujhFYVPtYrngSco31BUcSa9TH31Gqg=="],
 
-    "@redis/json": ["@redis/json@1.0.7", "", { "peerDependencies": { "@redis/client": "^1.0.0" } }, "sha512-6UyXfjVaTBTJtKNG4/9Z8PSpKE6XgSyEb8iwaqDcy+uKrd/DGYHTWkUdnQDyzm727V7p21WUMhsqz5oy65kPcQ=="],
+    "@redis/json": ["@redis/json@1.0.4", "", { "peerDependencies": { "@redis/client": "^1.0.0" } }, "sha512-LUZE2Gdrhg0Rx7AN+cZkb1e6HjoSKaeeW8rYnt89Tly13GBI5eP4CwDVr+MY8BAYfCg4/N15OUrtLoona9uSgw=="],
 
-    "@redis/search": ["@redis/search@1.2.0", "", { "peerDependencies": { "@redis/client": "^1.0.0" } }, "sha512-tYoDBbtqOVigEDMAcTGsRlMycIIjwMCgD8eR2t0NANeQmgK/lvxNAvYyb6bZDD4frHRhIHkJu2TBRvB0ERkOmw=="],
+    "@redis/search": ["@redis/search@1.1.1", "", { "peerDependencies": { "@redis/client": "^1.0.0" } }, "sha512-pqCXTc5e7wJJgUuJiC3hBgfoFRoPxYzwn0BEfKgejTM7M/9zP3IpUcqcjgfp8hF+LoV8rHZzcNTz7V+pEIY7LQ=="],
 
-    "@redis/time-series": ["@redis/time-series@1.1.0", "", { "peerDependencies": { "@redis/client": "^1.0.0" } }, "sha512-c1Q99M5ljsIuc4YdaCwfUEXsofakb9c8+Zse2qxTadu8TalLXuAESzLvFAvNVbkmSlvlzIQOLpBCmWI9wTOt+g=="],
+    "@redis/time-series": ["@redis/time-series@1.0.4", "", { "peerDependencies": { "@redis/client": "^1.0.0" } }, "sha512-ThUIgo2U/g7cCuZavucQTQzA9g9JbDDY2f64u3AbAoz/8vE2lt2U37LamDUVChhaDA3IRT9R6VvJwqnUfTJzng=="],
 
     "@rolldown/binding-android-arm-eabi": ["@rolldown/binding-android-arm-eabi@1.2.14", "", { "os": "android", "cpu": "arm" }, "sha512-aWR+XKH9+rW7m5fWq/5360J3mHycrx/o6xZM2DQFdJnTMdyP7/WzxPjhtLbVWdKo2y612/4U1bWqb3HQhiF7vg=="],
 
@@ -510,7 +511,7 @@
 
     "quote-js-string": ["quote-js-string@0.1.0", "", {}, "sha512-Y3NoRtprEEZQD8RfxMCfS0ZTqc4e+i18OrXEXAvpM6TfC/3y+0L5rNbZiSnbBBEkDfFzbpd8o+cE8q3/anjMGA=="],
 
-    "redis": ["redis@4.7.1", "", { "dependencies": { "@redis/bloom": "1.2.0", "@redis/client": "1.6.1", "@redis/graph": "1.1.1", "@redis/json": "1.0.7", "@redis/search": "1.2.0", "@redis/time-series": "1.1.0" } }, "sha512-S1bJDnqLftzHXHP8JsT5II/CtHWQrASX5K96REjWjlmWKrviSOLWmM7QnRLstAWsu1VBBV1ffV6DzCvxNP0UJQ=="],
+    "redis": ["redis@4.6.0", "", { "dependencies": { "@redis/bloom": "1.2.0", "@redis/client": "1.5.0", "@redis/graph": "1.1.0", "@redis/json": "1.0.4", "@redis/search": "1.1.1", "@redis/time-series": "1.0.4" } }, "sha512-QTlRvQtfRM9ZxFRfBmd8UsGGrKZil/cAwlbDTnaSKirCUMfWgXjKQ4VlkhmNBc3mnAbbSgeYw9zs/HcfYGd1Cw=="],
 
     "regjsparser": ["regjsparser@0.13.4", "", { "dependencies": { "jsesc": "~3.1.0" }, "bin": { "regjsparser": "bin/parser" } }, "sha512-EWV80YgFaVgFrjGCAsV7oybp4GOxbls5RzBg8OB0nKEVXsBJR1JlV8Di1JhCROg3MzTfe1RI8yitIm1eOs68iA=="],
 

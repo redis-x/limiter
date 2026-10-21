@@ -1,14 +1,5 @@
-import type {
-	RedisClientType,
-	RedisFunctions,
-	RedisModules,
-	RedisScripts,
-} from 'redis';
+import type { RedisXScript } from '@redis-x/client';
 
-export type RedisClient = RedisClientType<
-	RedisModules,
-	RedisFunctions,
-	RedisScripts
->;
+export type Script = RedisXScript<string[], unknown>;
 
 export const REDIS_PREFIX = '@x:limiter';

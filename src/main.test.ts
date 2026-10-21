@@ -1,8 +1,8 @@
 import { test } from 'vitest';
-import { redisClient } from '../test/redis.js';
+import { redisXClient } from '../test/redis.js';
 import { RedisXLimiter, RedisXLimiterType } from './main.js';
 
-const limiter = new RedisXLimiter(redisClient, {
+const limiter = new RedisXLimiter(redisXClient, {
 	type: RedisXLimiterType.FixedWindowUserDefinedStart,
 	name: 'test',
 	limit: 2,

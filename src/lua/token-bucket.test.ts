@@ -1,14 +1,11 @@
 // oxlint-disable no-await-in-loop -- Requests must consume and refill the same bucket in order.
 import { randomUUID } from 'node:crypto';
-import { createClient } from 'redis';
 import { afterAll, beforeAll, expect, test } from 'vitest';
+import { redisXClient } from '../../test/redis.js';
 import lua_hit from './hit.lua' with { type: 'text' };
 import lua_prepare from './prepare.lua' with { type: 'text' };
 import lua_time from './time.lua' with { type: 'text' };
 
-const client = createClient({
-	socket: { host: '127.0.0.1', port: 16379, reconnectStrategy: false },
-});
 const prefix = `token-bucket-test-${randomUUID()}`;
 const blockKey = `${prefix}:blocks`;
 const ownedKeys = new Set([blockKey]);
@@ -22,22 +19,15 @@ interface LimiterOptions {
 }
 
 beforeAll(async () => {
-	await client.connect();
-	const time = await client.sendCommand(['TIME']);
+	const time = (await redisXClient.sendCommand('TIME')) as string[];
 	timestamp = Number(time[0]) + 120;
 });
 
 afterAll(async () => {
-	if (client.isOpen) {
-		try {
-			await client.del([...ownedKeys]);
-		} finally {
-			await client.quit();
-		}
-	}
+	await redisXClient.DEL([...ownedKeys]);
 });
 
-/** Allocates isolated limiter state without importing the FLUSHDB test helper. */
+/** Allocates isolated limiter state on the shared test client. */
 function createLimiter(options: LimiterOptions) {
 	const name = randomUUID();
 	const key = `${prefix}:${name}`;
@@ -50,30 +40,28 @@ type Limiter = ReturnType<typeof createLimiter>;
 /** Runs the actual composed Lua for one limiter or a batch at a controlled time. */
 function hit(limiters: Limiter | Limiter[], offset = 0, subject = 'subject') {
 	const entries = Array.isArray(limiters) ? limiters : [limiters];
-	return client.eval(
+	return redisXClient.EVAL(
 		[`local ts = ${timestamp + offset}`, lua_prepare, lua_hit].join('\n'),
-		{
-			keys: [blockKey, ...entries.map((limiter) => limiter.key)],
-			arguments: [
-				subject,
-				'hit',
-				...entries.flatMap((limiter) => [
-					limiter.type,
-					limiter.name,
-					String(limiter.limit),
-					String(limiter.ttl),
-					String(limiter.block),
-				]),
-			],
-		},
+		[blockKey, ...entries.map((limiter) => limiter.key)],
+		[
+			subject,
+			'hit',
+			...entries.flatMap((limiter) => [
+				limiter.type,
+				limiter.name,
+				String(limiter.limit),
+				String(limiter.ttl),
+				String(limiter.block),
+			]),
+		],
 	);
 }
 
 /** Reads both parts of the bucket state for mutation and deadline assertions. */
 async function usage(limiter: Limiter, subject = 'subject') {
 	const [value, deadlines] = await Promise.all([
-		client.hGet(limiter.key, subject),
-		client.sendCommand(['HEXPIRETIME', limiter.key, 'FIELDS', '1', subject]),
+		redisXClient.HGET(limiter.key, subject),
+		redisXClient.sendCommand('HEXPIRETIME', limiter.key, 'FIELDS', 1, subject),
 	]);
 	if (value !== null) {
 		expect(value).toMatch(/^[1-9]\d*$/u);
@@ -82,7 +70,7 @@ async function usage(limiter: Limiter, subject = 'subject') {
 
 	return {
 		used: value === null ? null : Number(value),
-		deadline: deadlines[0],
+		deadline: (deadlines as number[])[0],
 	};
 }
 
@@ -100,7 +88,9 @@ test('allows a full burst and expires each snapshot when fully refilled', async 
 	expect(await hit(limiter)).toEqual([1, [[limiter.name, 3]]]);
 	expect(await hit(limiter, 2)).toEqual([1, [[limiter.name, 1]]]);
 	expect(await usage(limiter)).toEqual(before);
-	expect(await client.hExists(blockKey, `${limiter.name}:subject`)).toBe(false);
+	expect(await redisXClient.HEXISTS(blockKey, `${limiter.name}:subject`)).toBe(
+		false,
+	);
 	expect(await hit(limiter, 3)).toBeNull();
 	expect(await usage(limiter)).toEqual({ used: 1, deadline: timestamp + 13 });
 });
@@ -212,7 +202,7 @@ test('keeps independent buckets for limiting IDs in one hash', async () => {
 	expect(await hit(limiter, 0, 'first')).toBeNull();
 	expect(await hit(limiter, 0, 'first')).toEqual([1, [[limiter.name, 10]]]);
 	expect(await hit(limiter, 0, 'second')).toBeNull();
-	expect(await client.hLen(limiter.key)).toBe(2);
+	expect(await redisXClient.HLEN(limiter.key)).toBe(2);
 });
 
 test('keeps a separate block active after the bucket refills', async () => {
@@ -221,13 +211,13 @@ test('keeps a separate block active after the bucket refills', async () => {
 	const before = await usage(limiter);
 	expect(await hit(limiter)).toEqual([1, [[limiter.name, 30]]]);
 	expect(
-		await client.sendCommand([
+		await redisXClient.sendCommand(
 			'HEXPIRETIME',
 			blockKey,
 			'FIELDS',
 			'1',
 			`${limiter.name}:subject`,
-		]),
+		),
 	).toEqual([timestamp + 30]);
 	const blocked = await hit(limiter, 10);
 	expect(blocked).toEqual([1, [[limiter.name, expect.any(Number)]]]);
@@ -267,7 +257,7 @@ test.each([false, true])(
 		expect(await hit(bucket)).toBeNull();
 		const entries = reverse ? [fixed, bucket] : [bucket, fixed];
 		expect(await hit(entries)).toEqual([1, [[bucket.name, 10]]]);
-		expect(await client.hGet(fixed.key, 'subject')).toBeNull();
+		expect(await redisXClient.HGET(fixed.key, 'subject')).toBeNull();
 	},
 );
 
@@ -276,29 +266,30 @@ test('records an accepted mixed batch', async () => {
 	const fixed = createLimiter({ type: '1', limit: 2, ttl: 60 });
 	expect(await hit([bucket, fixed])).toBeNull();
 	expect(await usage(bucket)).toEqual({ used: 1, deadline: timestamp + 5 });
-	expect(await client.hGet(fixed.key, 'subject')).toBe('1');
+	expect(await redisXClient.HGET(fixed.key, 'subject')).toBe('1');
 });
 
 test('uses Redis time and naturally expired fields in the normal script', async () => {
 	const limiter = createLimiter({ limit: 2, ttl: 10 });
-	await client.hSet(limiter.key, 'subject', '2');
-	await client.sendCommand([
+	await redisXClient.HSET(limiter.key, 'subject', '2');
+	await redisXClient.sendCommand(
 		'HEXPIREAT',
 		limiter.key,
 		'1',
 		'FIELDS',
 		'1',
 		'subject',
-	]);
-	expect(await client.hGet(limiter.key, 'subject')).toBeNull();
-	const before = await client.sendCommand(['TIME']);
+	);
+	expect(await redisXClient.HGET(limiter.key, 'subject')).toBeNull();
+	const before = (await redisXClient.sendCommand('TIME')) as string[];
 	expect(
-		await client.eval([lua_time, lua_prepare, lua_hit].join('\n'), {
-			keys: [blockKey, limiter.key],
-			arguments: ['subject', 'hit', '4', limiter.name, '2', '10', '-1'],
-		}),
+		await redisXClient.EVAL(
+			[lua_time, lua_prepare, lua_hit].join('\n'),
+			[blockKey, limiter.key],
+			['subject', 'hit', '4', limiter.name, '2', '10', '-1'],
+		),
 	).toBeNull();
-	const after = await client.sendCommand(['TIME']);
+	const after = (await redisXClient.sendCommand('TIME')) as string[];
 	const current = await usage(limiter);
 	expect(current.used).toBe(1);
 	expect(current.deadline).toBeGreaterThanOrEqual(Number(before[0]) + 5);
@@ -309,18 +300,18 @@ test.each([1, 2_147_483_647])(
 	'preserves the final token at maximum capacity with ttl %i',
 	async (ttl) => {
 		const limiter = createLimiter({ limit: Number.MAX_SAFE_INTEGER, ttl });
-		await client.hSet(limiter.key, 'subject', String(limiter.limit - 1));
-		await client.sendCommand([
+		await redisXClient.HSET(limiter.key, 'subject', String(limiter.limit - 1));
+		await redisXClient.sendCommand(
 			'HEXPIREAT',
 			limiter.key,
 			String(timestamp + ttl),
 			'FIELDS',
 			'1',
 			'subject',
-		]);
+		);
 
 		expect(await hit(limiter)).toBeNull();
-		expect(await client.hGet(limiter.key, 'subject')).toBe(
+		expect(await redisXClient.HGET(limiter.key, 'subject')).toBe(
 			String(limiter.limit),
 		);
 		expect(await hit(limiter)).toEqual([1, [[limiter.name, 1]]]);
