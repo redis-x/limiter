@@ -3,6 +3,10 @@ import { defineConfig } from 'vitest/config';
 
 // eslint-disable-next-line no-restricted-exports
 export default defineConfig({
+	test: {
+		// Integration tests reset the shared Redis database before each case.
+		fileParallelism: false,
+	},
 	plugins: [
 		{
 			name: 'lua-text',
