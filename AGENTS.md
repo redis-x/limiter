@@ -1,6 +1,6 @@
 # Limiter redesign: agent instructions and design record
 
-Last updated: 2026-10-21.
+Last updated: 2026-10-22.
 
 ## Working agreement
 
@@ -10,6 +10,8 @@ Last updated: 2026-10-21.
 - Treat this as the intended new design, not documentation of behavior already implemented. Preserve unrelated existing work.
 - Prefer the latest explicit user decision when it supersedes an earlier discussion.
 - Tests must import and use the shared `redisXClient` from `test/redis.ts`. Create additional clients only when the test specifically exercises behavior involving different clients. Individual suites must not connect or disconnect the shared instance.
+- Organize tests by limiter type, rather than public method. Keep tests minimal and exercise the public product API, not Redis behavior or isolated script parts. The current fixed-window suites cover single limiters only; batching is outside this request.
+- Explicit exception requested by the user: every limiter type's tests must also inspect storage to verify that obsolete hash fields or sorted-set members are deleted at the appropriate expiration/cleanup point. Include expired fields in the shared `_block` hash. Create state through public limiter methods; these assertions verify the library's expiration logic rather than Redis commands in isolation.
 
 ## Terminology
 
@@ -751,3 +753,18 @@ This continues the design discussion. Implementation changes have not been reque
 - Confirmed main.test.ts restores a test and owned-key cleanup; it now asserts two accepted hits followed by RedisXLimiterExceededError. Five focused live Redis tests passed for this smoke case and single/batch check capacity and stored-block behavior. Two old-protocol stub cases were excluded. TypeScript passed.
 - Remaining policy difference: getSmallestLimit still selects the shortest known reset TTL when remaining counts tie. A probe with equal remaining counts and reset durations 60/120 selected 60. To retain the prior assistant recommendation of longest known reset first, the comparator must be reversed while placing missing TTL last. No new user decision about the tie-break was inferred.
 - Review only: implementation and tests were not edited. The full test suite has not been validated against the new response protocol.
+
+## Public fixed-window test suites (2026-10-22)
+
+- The user requested separate tests for the two fixed-window types in `src/main`, covering every single-limiter method without batching. They removed the method-oriented check/hit suites and requested minimal tests of the resulting product, with no Redis or script-part assertions.
+- Added `src/main/fixed-window.test.ts` and `src/main/fixed-window-user-defined-start.test.ts`. Each contains two lifecycle tests using `check`, `get`, and `hit`: quota consumption, exhaustion and recovery; and a configured block that outlasts the counting window without being extended by rejected retries. The quota tests also verify limiting-ID isolation and the distinct clock-aligned/first-hit reset semantics.
+- Tests use the shared `redisXClient`, unique limiter names, and real short expiration waits. Direct Redis commands are limited to cleaning up each suite's own keys and block fields. There are no script imports, mocks, Redis-state assertions, or additional clients. `getAll` belongs only to the batch API and is outside this scope.
+- Replaced the superseded fixed-window Lua suite and duplicate smoke test with these public API suites. Preserved the user's deleted method suites and left unrelated algorithm/constructor tests and implementation code unchanged.
+- Verification: all four new tests passed under Vitest and Bun (60 assertions per runner). TypeScript and targeted Biome, ESLint, Oxlint, and whitespace checks passed. The dedicated test database was empty before each runner. Full-suite validation remains outside this focused request because other algorithm tests still target WIP script interfaces.
+
+### Expiration coverage refinement
+
+- The user additionally requested checking deletion of old hash fields/sorted-set members for every limiter type, including fields in `_block`. This supersedes the earlier restriction against all Redis-state assertions for this specific purpose.
+- Both fixed-window suites now verify that a hit creates its usage field and that the field is absent after the window deadline, before another public limiter call. Existing block lifecycle tests verify no stored block before an exceeding hit, block creation on rejection, usage-field expiration while the block remains present, and removal of the block field after its independent deadline. Reuse the existing waits and four lifecycle tests.
+- Apply the same requirement when the other limiter types receive public API suites; their script branches remain WIP and were not changed here. For sorted sets, test obsolete-member removal at the algorithm's cleanup point while newer hits remain, as well as idle key expiration; do not assume Redis expires individual members automatically.
+- Verification after this refinement: all four tests passed under Vitest and Bun (74 Bun assertions). TypeScript and targeted Biome, ESLint, Oxlint, and whitespace checks passed. No limiter implementation changes were needed.

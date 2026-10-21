@@ -109,8 +109,6 @@ export async function runScript(
 		});
 	}
 
-	console.log(block, usage);
-
 	return {
 		block,
 		usage,
