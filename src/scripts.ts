@@ -1,51 +1,126 @@
 import type { RedisXClient } from '@redis-x/client';
 import { nanoid } from 'nanoid';
-import lua_hit from './lua/hit.lua' with { type: 'text' };
-import lua_prepare from './lua/prepare.lua' with { type: 'text' };
-import lua_time from './lua/time.lua' with { type: 'text' };
+import lua_script from './script.lua' with { type: 'text' };
 import { REDIS_PREFIX, type Script } from './utils.js';
 
-// const SCRIPT_GET = [lua_time, lua_prepare].join('\n');
-const SCRIPT_HIT = [lua_time, lua_prepare, lua_hit].join('\n');
-
-export type RedisXLimiterScripts = {
-	// get: Script;
-	hit: Script;
-};
-const SCRIPTS = new WeakMap<RedisXClient, RedisXLimiterScripts>();
-
-/** Creates scripts on RedisX client. */
-export function createScripts(
-	redisXClient: RedisXClient,
-): RedisXLimiterScripts {
-	let scripts = SCRIPTS.get(redisXClient);
-	if (!scripts) {
-		scripts = {
-			// get: redisXClient.createScript(SCRIPT_CHECK),
-			hit: redisXClient.createScript(SCRIPT_HIT),
-		};
-		SCRIPTS.set(redisXClient, scripts);
-	}
-
-	return scripts;
+const SCRIPTS = new WeakMap<RedisXClient, Script>();
+export enum SCRIPT_OP {
+	GET = '1',
+	HIT = '2',
 }
 
+/** Creates scripts on RedisX client. */
+export function createScript(redisXClient: RedisXClient): Script {
+	let script = SCRIPTS.get(redisXClient);
+	if (!script) {
+		script = redisXClient.createScript(lua_script);
+		SCRIPTS.set(redisXClient, script);
+	}
+
+	return script;
+}
+
+class ScriptResultError extends Error {
+	constructor() {
+		super('Script result is not valid.');
+	}
+}
+
+type UsageState = {
+	name: string;
+	usage: {
+		remaining: number;
+		ttl?: number;
+	};
+};
+
+type BlockState = {
+	name: string;
+	block: {
+		ttl: number;
+	};
+};
+
+type LimiterState = UsageState | BlockState;
+
 /**
- * Hits limiters with the given key. If any of the limiters are exceeded, does nothing.
+ * Reads or hits limiters. Rejected hits may create blocks but never consume usage.
  */
 // oxlint-disable-next-line max-params
-export async function hit(
+export async function runScript(
 	redisXScript: Script,
+	op: SCRIPT_OP,
 	key: string | number,
-	hit_id: string | undefined,
+	hit_id: string | number | undefined,
 	redis_keys: string[],
 	redis_args: string[],
-): Promise<void> {
+): Promise<ReadonlyMap<string, LimiterState>> {
 	const result = await redisXScript.executeWithKeys(
 		[`${REDIS_PREFIX}:_block`, ...redis_keys],
+		op,
 		String(key),
-		hit_id ?? nanoid(16),
+		hit_id === undefined ? nanoid(16) : String(hit_id),
 		...redis_args,
 	);
-	console.log('result', result);
+
+	if (!Array.isArray(result)) {
+		throw new ScriptResultError();
+	}
+
+	const states = new Map<string, LimiterState>();
+	for (const result_limiter of result) {
+		if (!Array.isArray(result_limiter)) {
+			throw new ScriptResultError();
+		}
+
+		const [limiter_name, status] = result_limiter;
+		if (typeof limiter_name !== 'string' || !(status === 0 || status === 1)) {
+			throw new ScriptResultError();
+		}
+
+		if (status === 0) {
+			const remaining = result_limiter[2];
+			const ttl = result_limiter[3];
+			if (
+				typeof remaining !== 'number'
+				|| (ttl !== undefined && typeof ttl !== 'number')
+			) {
+				throw new ScriptResultError();
+			}
+
+			states.set(limiter_name, {
+				name: limiter_name,
+				usage: {
+					remaining,
+					ttl,
+				},
+			});
+		} else {
+			const ttl = result_limiter[2];
+			if (typeof ttl !== 'number') {
+				throw new ScriptResultError();
+			}
+
+			states.set(limiter_name, {
+				name: limiter_name,
+				block: {
+					ttl,
+				},
+			});
+		}
+	}
+
+	console.log(states);
+
+	return states;
+}
+
+export function check(states: ReadonlyMap<string, LimiterState>) {
+	for (const state of states.values()) {
+		if ('block' in state || state.usage.remaining <= 0) {
+			return false;
+		}
+	}
+
+	return true;
 }

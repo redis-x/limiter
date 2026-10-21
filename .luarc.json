@@ -1,13 +1,3 @@
 {
-	"diagnostics.globals": [
-		"redis",
-		"KEYS",
-		"ARGV",
-		"ts",
-		"key_block",
-		"limiting_key",
-		"hit_id",
-		"limiters",
-		"limiters_blocked"
-	]
+	"diagnostics.globals": ["redis", "KEYS", "ARGV"]
 }

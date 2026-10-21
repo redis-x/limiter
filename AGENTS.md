@@ -33,15 +33,16 @@ A fresh random hit ID for each recorded event enables ordinary hit counting in t
 
 ## Execution architecture: user decisions
 
-- Have two Lua entry-point scripts: a read-only check script and a hit script.
-- Each script supports all limiter types and accepts a list of limiters with their parameters.
+- Use one Lua script with an operation argument: 1=get, 2=hit. The dedicated Lua check operation has been removed; both public check methods use GET and inspect the decoded map for blocks or nonpositive remaining usage.
+- The shared script supports all limiter types and accepts a list of limiters with their parameters.
+- Latest user direction (2026-10-21): check returns false when the proposed hit cannot occur, including quota exhaustion without a stored block. Get reports current states; usage duration means full quota recovery, while unavailable states report a retry duration. Hit must inspect other limiters even when stored blocks exist, so reporting can select among all relevant blockers. Detailed decisions and the proposed admission/write sequence are recorded in the latest section below.
 - Checking or hitting multiple limiters together is a first-class requirement.
 - The hit script performs its own checks before the relevant writes within the same execution. A prior separate check is not required for every hit and does not reserve capacity.
 - Represent each limiter as a class instance with methods. Instances prepare/expose the keys and arguments required by the shared script execution path.
 - Provide another class whose constructor accepts limiter instances and whose methods operate on the group.
 - Single-limiter and group calls must use the same underlying function that executes the script. A single-limiter operation is a batch of one; a group gathers inputs for one script call rather than calling each member's public hit method separately.
 - When reporting a blocked batch, select the active block with highest priority, breaking priority ties by largest remaining block TTL. Lower-priority blocks remain enforced but are hidden from the reported blocking result.
-- Exact class names, method signatures, argument encoding, and returned result format are not yet selected.
+- Public method signatures and final outer response encoding remain in progress; the latest operation meanings and per-limiter status fields are recorded below.
 
 ## Time and expiration: user direction
 
@@ -527,3 +528,180 @@ References: [two-window weighting](https://smudge.ai/blog/ratelimit-algorithms) 
 - Lua suites retain unique key namespaces and delete their own keys after completion without closing the shared connection. The shared fixture owns client initialization and its existing database reset.
 - Before running the shared fixture, verified its destination was the dedicated test-redis container on port 16379 and database 0 was empty. The test runs used the fixture's existing FLUSHDB behavior; the fixture itself was not changed by this migration.
 - All 47 tests passed under both Vitest and Bun (3,346 assertions under Bun). TypeScript, ESLint, Oxlint, Biome, and whitespace checks passed. Constructor tests now use the same RedisX client as integration tests; no current test needs a separate client.
+
+## Read-only get architecture discussion (2026-10-21)
+
+The user asked how to expose current usage without recording a hit, whether disabling queued writes and set_block is sufficient, and whether to split reading from mutation. This is a design discussion; the following are assistant recommendations, not authorization to implement or a finalized response format.
+
+- Extract shared read/calculation logic that produces current per-limiter state using the captured Redis time. Retain algorithm-specific raw state needed by hit, such as previous/current epoch counters and the token-bucket reference time, to avoid repeating reads.
+- Compose two Lua entry points from shared fragments. Get returns the calculated state; hit evaluates the proposed hit, queues mutations, and applies usage writes only after the whole batch passes. Each operation remains one script execution; hit must not call get separately from JavaScript.
+- Preserve the existing distinction between newly justified blocks and usage writes: a rejected hit can create blocks, but a rejected batch must not increment counters or refresh repeated-hit deadlines. A second limiter loop must not immediately apply successful increments before discovering another limiter's rejection. The existing final hit_args command loop can remain the commit stage.
+- Simply suppressing hit_args and set_block commands is insufficient. Exact sliding currently issues ZREMRANGEBYSCORE immediately; prepare.lua returns early for existing blocks; token-bucket code calculates a prospective increment; successful hit currently returns no usage response.
+- For exact sliding, read active usage with ZCOUNT over scores strictly greater than ts, using an exclusive lower bound. Keep cleanup in the hit path. Once reads no longer depend on cleanup, repeated-hit membership must require ZSCORE > ts, and earliest-expiration queries must also exclude expired scores.
+- Fixed-window usage is the stored count or zero. Approximate usage is the current count plus the weighted previous count. Token usage must be derived from the stored integer N and deadline F: with capacity L and refill duration W, recover A = F - ceil(N * W / L), then usage = max(0, N - (ts - A) * L / W). Missing or expired state has zero usage. Do not clamp elapsed time to zero: the rebased reference time can be in the future.
+- Get must not invent a block or return configured block_ttl merely because a hypothetical next hit would exceed quota. At exact capacity, it can report zero remaining capacity without a new block. If existing block metadata is included, report only an actual block's remaining lifetime, separately from quota-recovery delay. If the API returns only usage, it can skip block reads entirely. In either case, shared preparation must not return before gathering requested usage; hit can retain its own existing-block shortcut.
+- A usage-only query does not need a hit ID. Determining whether a particular hit would fit is a separate question: an active repeated ID can fit at exhausted unique capacity. Get is a snapshot and does not reserve capacity or guarantee permission to hit.
+- Approximate and token usage can be fractional even though stored values are integers. Choose explicitly between fractional capacity and whole additional hits in the public response. Fractional Lua results need suitable serialization, such as decimal strings parsed in TypeScript, because ordinary numeric replies truncate fractions. Return per-limiter results in batch order rather than combining unrelated quotas.
+
+References: [ZCOUNT bounds](https://redis.io/docs/latest/commands/zcount/) and [Lua response conversion](https://redis.io/docs/latest/develop/programmability/lua-api/#lua-to-resp2-type-conversion).
+
+## Single-script operations and iteration review (2026-10-21)
+
+The user consolidated the Lua fragments into src/script.lua and explicitly selected one operation argument. The user requested explanation only; no implementation changes were authorized.
+
+### User-defined operation contracts
+
+- Check (0): return only already-blocked limiters, or nothing if none are blocked. The TypeScript method returns a boolean indicating whether the limiter/batch is already blocked; quota exhaustion alone is not an existing block.
+- Get (1): return every limiter. A blocked entry includes status 1 and its actual remaining block duration. An unblocked entry includes status 0, hits left, and seconds until hits left changes.
+- Hit (2): return existing blocked-limiters data if any; otherwise process the hit and return each limiter's outcome, either a newly blocked state or remaining usage in the same form as get.
+- The user proposes guarding queued mutations with op=hit and adjusting exhaustion branches so get does not manufacture blocks. This supersedes the previous separate-script recommendation.
+
+### Findings and assistant recommendations
+
+- One algorithm loop can serve get and hit, with a final mutation loop restricted to hit. Separate read/evaluate loops are optional; correctness depends on separating current state, proposed hit effects, and returned state inside each branch.
+- Guarding queue insertion avoids writes and unnecessary allocation for get, but the entire mutation stage should also be hit-only. ZREMRANGEBYSCORE is still an immediate write outside hit_args and needs hit-only handling. A read-only exact-window get must count only active deadlines; skipping cleanup while retaining ZCARD would overcount.
+- The proposed combined condition and else are insufficient: when op=hit and set_block returns true, the condition is false and the else could overwrite the newly blocked result with status 0. Treat get, hit with a newly created block, and hit without blocking support as distinct outcomes. Never call set_block for get; a successful set_block result must remain blocked.
+- For get, preserve entries already populated from the blocking hash and skip usage processing for those limiters. Otherwise their actual block lifetime could be replaced by usage or a fresh configured block duration.
+- Current result entries use limiter-name keys. Lua's length operator does not count those entries, and ordinary Redis Lua array replies omit string-keyed fields. Track block presence explicitly and return an indexed array (or explicitly serialize the map). The current hit shortcut using #result cannot detect these blocks. An empty Lua table returns an empty array, not the requested absence of a check result. Remaining references to the removed limiters_blocked table also need migration.
+- Guarding Redis writes does not guard local arithmetic: the token branch still rebases/increments its local counter for get. Compute current usage from the stored counter and deadline, and prospective/post-hit usage separately. Every unblocked branch needs a result, including empty and partially used limiters. Get returns pre-hit usage; an accepted hit returns post-hit usage, with active repeated IDs adding no unique usage.
+- The requested next-change duration differs from time until another hit fits. It must be calculated even with capacity remaining. Fixed windows use an active counter's deadline; exact sliding uses the earliest active deadline, accounting for hit-induced refreshes; approximate and token types need a consistent choice of whole-hit or fractional remaining capacity. Full idle capacity has no scheduled change and needs an explicit sentinel. These are recommendations; rounding and sentinel values remain undecided.
+- Block writes now share hit_args with usage writes, and the final loop executes all of them. This permits another limiter to consume quota when one newly exceeds its limit. The new wording may intentionally change earlier whole-batch rejection semantics; do not silently impose either policy. If whole-batch rejection still applies, separate block writes from usage writes and decide whether to discard usage writes before executing commands. If newly triggered blocks allow other limiters to record the hit, document that policy explicitly. The existing block-on-exceed boundary has not been explicitly changed to block-on-last-allowed-hit.
+
+Source inspection only; no scripts or tests were executed, and implementation files were not changed by the assistant.
+
+## Authorized fixed-window get/hit support (2026-10-21)
+
+- The user authorized updating only the fixed-window branch for get and hit, with shared calculations rather than duplicated response branches. Other algorithms and response-encoding/batch work remain WIP and are outside this implementation request.
+- The user explicitly requires both get and hit to skip limiters already present in result. Added a guard around algorithm dispatch that preserves those block entries without reading or mutating their usage. Removed the unused continue label as part of using the guard.
+- The user decided that approximate sliding windows and token buckets will report available whole hits rounded down and time until the next hit is permitted. Implementing that policy is deferred; it supersedes the earlier unresolved rounding discussion for these types.
+- Fixed-window processing now reads current usage and the existing field deadline once, queues mutations only for hit, and builds an unblocked result in one shared place. Get returns current capacity; accepted hits return capacity after the increment. Remaining time is HEXPIRETIME minus the captured script timestamp.
+- First hits establish either the next clock-aligned boundary or a full duration starting now. Subsequent accepted hits preserve that deadline. Get never creates a counter, extends a window, or calls set_block.
+- Consuming the last allowed hit returns status 0 and zero remaining hits. An exceeding hit creates the configured block, preserving its status-1 result; exhaustion-only mode returns status 0, zero remaining hits, and the window's remaining duration without incrementing. Remaining capacity is clamped to zero if stored usage already exceeds the configured limit.
+- Implementation choice: an unused/expired fixed-window limiter returns full capacity with duration -1, indicating no active window and no scheduled capacity change. This sentinel was stated during implementation; it is not a separately confirmed user preference.
+- Added 19 fixed-window regression tests using the shared redisXClient. They cover both window alignments, read-only get for empty/partly used/exhausted state, post-hit usage, deadline preservation, the block-on-exceed boundary, exhaustion without blocking, existing-block preservation with and without usage, expired state, and a get batch.
+- Because the outer response encoding remains WIP, the tests replace only the final map return with JSON encoding to inspect the internal result and use a controlled script timestamp. They do not claim the public TypeScript get/check methods or production map serialization are complete.
+- Verified the dedicated test Redis database was empty before using the shared fixture and its existing FLUSHDB. All 19 tests passed under Vitest and Bun (65 Bun assertions). TypeScript, ESLint, Oxlint, Biome, and whitespace checks passed for the change. The full existing Lua suites still reference removed fragments and were not run as part of this focused change.
+- The build generated bundles and declarations but its checks failed on the existing unused valibot dependency and local @redis-x/client tarball dependency. Those packaging changes were left to the ongoing WIP.
+
+## Review of result-array and fixed-window deadline changes (2026-10-21)
+
+- The user selected an indexed result array plus a separate result_names membership table. save_result should append only the first result for each limiter, preserving a block against a later attempted usage result. This is the intended design; the reviewed implementation does not yet fully implement it.
+- The user explicitly changed unused-window reporting: clock-aligned fixed windows report time until the next boundary even before a hit; unused first-hit/user-defined-start windows have no deadline and report nil. This supersedes the assistant's -1 sentinel for both types. Existing active windows continue to report their retained deadline minus the captured timestamp.
+- Review finding: save_result still assigns result[limiter_name] instead of appending, so result is still a string-keyed map. Its length remains zero, native replies omit its entries, and hit fails to short-circuit on existing blocks. Reproduced an existing-block check returning an empty array and a blocked batch incrementing a companion counter to 1 while returning an empty array.
+- Review finding: the algorithm-dispatch guard still checks result[limiter.name]. Once result is converted to an array, it must consult result_names to skip existing entries; suppressing duplicate output does not skip the associated processing.
+- Review finding: the unused first-hit branch always assigns ts + ttl, including for get. An internal-result probe returned full capacity with duration 60 for an unused 60-second limiter rather than an absent deadline. Assign that new deadline only when starting the window on a hit.
+- Review finding: ts_expire == nil and nil or ts_expire - ts is not a safe nil guard. If ts_expire is nil, the and expression produces nil and the or expression evaluates subtraction anyway. Reproduced Redis's arithmetic-on-nil error. A trailing nil in a returned Lua array omits that element; it does not return an explicit null slot.
+- The clock-aligned next-boundary calculation and result_names first-result-wins behavior are sound. Existing test instrumentation replaces the final native return with JSON encoding and therefore cannot verify the intended Redis array response; those expectations need migration with the response design.
+- Verification used the shared redisXClient after confirming its dedicated test database was empty, isolated temporary keys, and cleanup of only those keys. Native-response probes executed the actual source; an in-memory final-return replacement inspected the otherwise hidden first-hit result. No implementation or test files were changed during this review.
+
+### Follow-up verification of the result and deadline fixes
+
+- Confirmed save_result now appends to the indexed result array and records membership in result_names; the iteration guard also uses result_names. Redis returns the actual array, and #result now correctly triggers the existing-block shortcut for hit.
+- Confirmed get for an unused first-hit limiter no longer constructs a deadline. Its first hit creates the deadline; later hits retain it. Deadline subtraction is now guarded explicitly, eliminating arithmetic on nil.
+- One response-contract difference remains: local ttl defaults to -1, so an unused first-hit get returns [name, 0, limit, -1], not the previously requested absent/nil TTL. Record this as observed behavior pending clarification, not an accepted change to the user's nil preference.
+- Direct Redis assertions verified native array replies, read-only gets for both empty window types, empty and blocked checks, the first-hit deadline, preserved deadlines on subsequent hits, the last allowed hit remaining unblocked, a single blocked result on an exceeding hit, existing blocks preventing all companion usage in a hit batch, mixed blocked/unblocked get results, and exhaustion-only hits returning zero without incrementing or creating blocks.
+- All assertions passed using the unchanged source and its real Redis TIME. The shared test client used the dedicated database after an empty-database check; probes allocated unique keys and removed those keys afterward. Existing test files still use the older map-oriented expectations and were not changed or run for this review.
+
+## Exhaustion responses without a stored block (2026-10-21)
+
+- The user wants status 1 with a recovery duration for both get and hit when fixed-window quota is exhausted, including when block_ttl is omitted. No blocking-hash entry should be created in exhaustion-only mode. This supersedes the earlier status-0 response for an already-exhausted limiter in that mode.
+- Status 1 therefore can describe quota unavailability as well as a separately persisted block. For fixed-window exhaustion, its duration is the remaining window lifetime; for an actual stored block, it is that block's remaining lifetime. Get remains read-only, and a hit that finds no capacity must not increment the counter.
+- Confirmed by the user: distinguish a hit rejected because it found no capacity from a successful hit consuming the last available slot. With limit 3 and prior usage 2, the third hit returns status 0 with zero remaining hits; a subsequent get or fourth hit returns status 1 with the remaining window lifetime in exhaustion-only mode. Determine hit rejection from capacity before incrementing, rather than treating zero capacity after an accepted hit as rejection.
+- The current check operation reads only the blocking hash, so it still reports no stored block for exhausted limiters without block_ttl. It must not be interpreted as a capacity/admission check. The user has not requested changing its scope.
+- For future exact sliding-window work, exhausted unique capacity prevents new IDs, while an already-active hit ID can still be accepted and refreshed in the absence of a stored block. Do not generalize fixed-window unavailability into rejecting all repeated IDs.
+- This turn is a design discussion; implementation and tests were not changed or executed.
+
+### Authorized fixed-window exhaustion response update
+
+- The user explicitly authorized implementing the agreed responses in the fixed-window branch only. Other algorithm branches and shared helpers were left unchanged.
+- Capture exhaustion before any increment. Get and a hit that finds exhausted capacity now save [name, 1, remainingWindowTTL]; a successful hit consuming the last slot still saves [name, 0, 0, remainingWindowTTL]. No usage is incremented on rejection.
+- A configured block is still created only by an exceeding hit. Its result is saved first and takes precedence over the quota-recovery fallback through save_result. Get does not create a block; exhaustion-only hits do not write the blocking hash.
+- Verified both fixed-window types with and without block_ttl using the shared RedisX test client and native replies. Assertions covered unused windows, the last accepted hit, exhausted get, repeated rejected hits, unchanged counter/deadline, configured block duration/deadline, and check remaining limited to persisted blocks. All assertions and whitespace checks passed.
+- Confirmed the dedicated Redis test database was empty before using the shared fixture. Verification used unique temporary keys and removed them afterward. The existing temporary debug rows were preserved and filtered by limiter name in assertions. No test files or other limiter implementations were modified.
+
+## Draft TypeScript response API and selection (2026-10-21)
+
+The user requested inspecting the current TypeScript and drafting response processing before updating other algorithms. This is a design draft; implementation changes have not been requested for this turn.
+
+### User proposal
+
+- get returns one representative state: the strongest reported block, or the weakest remaining quota if no limiter is unavailable.
+- getAll returns all limiter states, including active quota and blocked/exhausted states.
+- hit returns the weakest remaining quota after acceptance, or throws an error containing the strongest reported block on rejection.
+- Block selection first considers the highest priority among unavailable limiters, then the longest duration within that priority. Lower-priority limiters remain enforced but are hidden from the selected response.
+- The motivation is reporting remaining capacity/reset information on successful HTTP responses and Retry-After on HTTP 429 responses. check remains a boolean operation over stored blocks.
+
+### Assistant draft: decoder and public methods
+
+- Keep runScript as the shared Redis execution and validation boundary returning every parsed state. Its existing Map<string, State> is appropriate; recommend exposing a ReadonlyMap<string, LimiterState> contract rather than reducing the result inside the decoder. It should throw Redis/protocol errors, not throw merely because a row has status 1.
+- Retain a usage/block union close to the current shape. A UsageState contains name and usage with remaining: number and ttl?: number. A BlockState contains name and block.ttl: number. LimiterState is their union. Export public result types and the domain error through the package entry point when implementing.
+- Rename the current usage.limit property to remaining: Lua returns remaining capacity in that slot, not the configured limit. Allow an omitted usage TTL, as unused first-hit windows intentionally return a three-element row. The current decoder rejects that valid row because it requires a numeric fourth element. Validate expected tuple shapes, finite integer numeric values, and unique known limiter names; require complete GET responses while permitting CHECK and rejected-HIT subsets.
+- Proposed method returns on both single limiters and batches: get -> Promise<LimiterState>; getAll -> Promise<ReadonlyMap<string, LimiterState>>; hit -> Promise<UsageState>, throwing an exported LimiterBlockedError carrying the selected BlockState. Redis and malformed-response errors remain distinguishable from quota rejection.
+- get and getAll use the existing GET operation; getAll requires no new Lua operation. get applies shared TypeScript selection to that response. hit applies the same selection to its HIT response, throws only if the selected state is a BlockState, and does not issue a second get. Preserve successful status-0 results with remaining zero.
+- Both classes should use the same pure selection helper supplied with their limiter metadata. Priority already exists on limiter instances and does not need a Redis argument for presentation selection. Use constructor/batch order for deterministic ties, and retain the selected limiter's own remaining count and TTL together.
+- Proposed weakest-quota ordering: smallest remaining whole quota count, then longest known usage TTL, then original batch order. For a TTL tie-break, prefer a known TTL over an absent one without inventing a deadline. Compare absolute remaining units, not percentage of configured capacity; priority filtering applies only to blocks. This ordering is an assistant recommendation awaiting user agreement.
+- Strongest-block ordering: highest numeric priority among status-1 states, then longest block/recovery TTL, then original batch order. An active higher-priority limiter must not hide an unavailable lower-priority one. Status 1 includes both persisted blocks and quota exhaustion; the current Lua tuple does not identify which cause produced the row.
+
+### Contract details that must remain explicit
+
+- Confirmed by the user: presenting blocking requirements in priority order is intentional. Library users can assign higher priority to unconditional waiting blocks and lower priority to conditional blocks such as CAPTCHA. A priority-100 block lasting 60 seconds is reported before a priority-10 conditional block lasting 3,600 seconds. Once the higher-priority block expires, a retry can receive HTTP 429 identifying the still-active conditional block, allowing the client to satisfy that condition. Lower-priority blocks remain enforced throughout. Treat this sequence as accepted behavior.
+- The selected duration belongs to the reported block; it does not promise that every limiter will be available afterward. The library provides priority selection, limiter identity, and duration. Application authors own the condition semantics, response presentation, verification, and lifting of conditional blocks. This decision does not require built-in CAPTCHA handling or automatic clearing of lower-priority blocks.
+- get/hit must keep the selected limiter's identity and duration together. Do not attach a maximum TTL from another limiter to the selected name just to imply all blocks will expire together.
+- The current HIT existing-block shortcut returns only persisted blocks without inspecting other quotas. GET can therefore discover a higher-priority exhaustion state that HIT does not report. Consistent selection across all unavailable limiters will require quota inspection before HIT returns, without recording usage when an existing block has already rejected the batch; TypeScript alone cannot select information omitted by Lua.
+- Throwing in TypeScript cannot roll back Redis writes. The current script may increment other limiters when one newly exhausts/blocks. A promise that every rejected batch consumes no usage requires a separate Lua admission/write policy; this draft does not silently change the user's ongoing batch WIP.
+- The current check implementation returns true when its map is empty (no stored block), whereas earlier prose described true when blocked. Boolean polarity must be explicit; either way it is not a guarantee that a hit fits because CHECK does not inspect exhausted quota.
+- Missing usage TTL stays absent and should not be converted to zero or a fabricated deadline. For approximate windows and buckets, the earlier 'time until another hit is permitted' value is not automatically a reset time: it can be zero while remaining capacity is positive. An HTTP adapter must document algorithm-specific timing or the usage timing contract must be refined before mapping it to a reset header. Full bucket refill and next-token availability are distinct times.
+- Keep HTTP header formatting outside the limiter's core state API. The current IETF draft uses RateLimit and RateLimit-Policy; the user's RateLimit-Remaining/RateLimit-Reset naming is from earlier conventions. Header-format selection should not determine the Redis protocol or core return types.
+- Reviewed source only; no implementation or test files changed, and no Redis scripts/tests were run for this draft.
+
+References: [Retry-After semantics](https://www.rfc-editor.org/rfc/rfc9110.html#name-retry-after) and [current IETF rate-limit field draft](https://www.ietf.org/archive/id/draft-ietf-httpapi-ratelimit-headers-11.html).
+
+## Response timing, batch admission, and check clarification (2026-10-21)
+
+This continues the design discussion. Implementation changes have not been requested for this turn. The following decisions supersede earlier stored-block-only check semantics and next-hit timing for usage states.
+
+### Confirmed user decisions
+
+- Hit throws a quota rejection only for a returned block state. A usage state with zero remaining hits is a successful last accepted hit and must not trigger that exception. Redis/protocol errors remain separate errors.
+- Remove the HIT shortcut that omits other relevant blockers. Every limiter without an already-reported stored block needs evaluation, even after another limiter has rejected the batch, so priority selection sees all relevant unavailable states.
+- Usage TTL means time until full quota recovery assuming no further hits: an exact sliding window has zero active members, an approximate sliding window has zero estimated usage, and a token bucket is full. An accepted hit reports the recovery time after that hit, including an accepted repeated sliding-window ID's refreshed deadline.
+- Block-state TTL supplies the retry duration. Quota exhaustion uses time until the proposed hit fits; a persisted block uses its remaining block lifetime. Fixed-window timing and the previously accepted absent deadline for an unused first-hit window remain unchanged.
+- Check must return false when the proposed hit cannot occur and true when it can at the evaluation time. Merely finding no entry in the blocking hash is insufficient.
+
+### User proposals and assistant recommendations
+
+- The user proposed writing new blocks immediately, tracking an is_blocked flag, and executing hit_args only when the flag remains false. This supports batch admission without consuming quota for a rejected hit, provided hit_args contains only usage mutations. A separate block_args queue executed after evaluation is also possible, but is not required by the proposed policy.
+- Assistant recommendation: name the flag rejected or can_hit to make clear that exhaustion without block_ttl also rejects a batch. Initialize it from stored blocks, then set rejection for every failed capacity check, independently of whether a new block is persisted. Never infer rejection from a successful post-hit usage count of zero.
+- Continue evaluation after rejection. For HIT only, create configured blocks for newly exceeded limiters, including when another limiter already has a stored block; retain existing block deadlines without refreshing them. This treatment of newly exceeded limiters during an already-blocked batch is an assistant recommendation for the proposed sequence, not a separately confirmed user decision.
+- On rejection, discard all queued usage increments, insertions, and repeated-ID refreshes and return only block states. Usage values computed for candidate hits describe changes that will not be committed and must not be returned as actual post-hit usage. When every limiter accepts, execute usage mutations and return their post-hit usage states.
+- Get must remain read-only and must not create or extend blocks. The exact sliding-window branch currently performs unconditional expired-member cleanup; when adapting it, read only active members for GET and defer physical cleanup to an appropriate write path.
+- The user proposed removing Lua CHECK and implementing the public check method through GET. Recommend this: one GET evaluation followed by testing that no state is a block, without a second Redis call. The public method can reuse get selection because any unavailable state takes precedence over usage. The current result.size === 0 test must change because GET returns usage rows for allowed limiters.
+- Check should accept and forward the optional hit ID just as get/hit do. For exact sliding windows, an active repeated ID may be accepted with zero remaining unique capacity. Without an ID, check tests capacity for a new unique hit. GET must report usage for an admissible repeated ID even at capacity, and report block for a new ID that cannot fit; stored blocks still reject both. Determine check from state kind, not remaining > 0.
+- Check is a read-only snapshot and reserves no capacity; hit still performs its own evaluation before writing.
+
+### Assistant derivation of full-recovery timing
+
+- Exact sliding window: the greatest active member deadline minus the captured time. Use the candidate post-hit state for an accepted hit, including refreshed repeated IDs. The earliest active deadline is used for an exhausted new-ID retry, not for full recovery.
+- Approximate sliding window: if the current epoch has usage, full recovery is at the end of the following epoch; if only the previous epoch has usage, it is at the end of the current epoch. In terms of seconds until the current epoch ends, the values are that duration plus one window, or that duration alone, respectively. Use counts after an accepted hit for its response.
+- Token bucket: the stored full-refill deadline minus the captured time, or the candidate committed deadline after an accepted hit. A whole-token retry duration remains a separate calculation for exhaustion.
+- Recommend zero full-recovery duration when these three algorithms are already empty/full. This is an assistant recommendation for the idle case and does not replace the existing fixed-window deadline conventions.
+- Source inspection and design-document updates only; no implementation or test files changed and no Redis scripts or tests were run.
+
+## Authorized result separation and check update (2026-10-21)
+
+### User decisions and implemented scope
+
+- The user explicitly authorized removing CHECK from Lua and TypeScript, updating fixed-window response timing, and implementing check by scanning the result map for blocks or zero remaining usage. Their updated SCRIPT_OP enum already contained only GET and HIT; the Lua CHECK path and stored-block HIT shortcut were removed.
+- Keep separate result_blocks and result_usage arrays and use the block array's length for batch admission. There is no separate global rejection boolean. Preserve result_names deduplication so stored or newly created block results cannot be overwritten by fallback quota results.
+- HIT evaluates every limiter without an existing stored block, including when another limiter has already rejected. Newly configured blocks are written immediately, independently of queued usage. Existing blocks retain their deadlines. If any block result exists, return only block results and execute no queued usage mutations; otherwise commit all queued usage and return post-hit usage.
+- GET combines block and current-usage rows into one native array, with block rows first. It does not create fixed-window counters or blocks. Exhaustion without a persisted block still contributes a block result and therefore prevents batch increments.
+- Fixed-window usage TTL is the remaining time until its full window reset. Exhaustion-only block TTL uses that same quota-recovery deadline; a persisted or newly created timed block uses its independent block expiration. Unused aligned windows retain the next-boundary duration; unused first-hit windows omit the duration. The last accepted hit remains a usage row with zero remaining.
+- Both public check methods now forward the optional hit ID, execute GET once, and return false if any map entry contains block or usage.remaining <= 0. They return true only when every entry has positive remaining usage. This explicit user rule supersedes the earlier assistant recommendation to test state kind alone. Sliding-window repeated-ID behavior must be reconciled when that WIP branch is adapted; no exception to the requested zero-usage check was introduced here.
+- Scope was the shared result/commit plumbing, fixed-window timing, and public check methods. Other algorithm branches and unfinished public get/getAll/hit selection/error handling were not migrated.
+
+### Verification
+
+- Updated the existing fixed-window tests to assert native Redis array replies, including omitted trailing TTL, instead of rewriting returns to JSON. Added batch cases covering exhausted limiters in either order, with and without configured blocks, discarded increments and first-hit initialization, discovery of additional blockers despite an existing block, independent block deadlines, and successful last-slot hits across a batch.
+- Added single/batch check tests against Redis for available capacity, exhaustion, existing blocks, and read-only behavior. Focused reply stubs on the shared script exercise zero-remaining usage and optional hit-ID forwarding without introducing another client or adapting the WIP sliding-window implementation.
+- All 31 focused tests passed under Vitest and Bun (122 Bun assertions), using redisXClient from test/redis.ts. Confirmed the dedicated database was empty before each runner; tests clean up their own keys and block fields. TypeScript passed. The full algorithm suite and package build were not run because unrelated algorithm/test and packaging WIP remains.
+- ESLint, Biome, and whitespace checks passed. Oxlint reported only existing unused-result warnings in the unfinished get/getAll methods and the existing debug console in the response decoder.

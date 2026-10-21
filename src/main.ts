@@ -1,6 +1,6 @@
-import type { RedisXClient, RedisXScript } from '@redis-x/client';
-import { createScripts, hit, type RedisXLimiterScripts } from './scripts.js';
-import { REDIS_PREFIX } from './utils.js';
+import type { RedisXClient } from '@redis-x/client';
+import { check, createScript, runScript, SCRIPT_OP } from './scripts.js';
+import { REDIS_PREFIX, type Script } from './utils.js';
 
 export enum RedisXLimiterType {
 	FixedWindow = '0',
@@ -21,7 +21,7 @@ export class RedisXLimiter {
 	readonly priority: number = Number.MAX_SAFE_INTEGER;
 	/** @internal */
 	// eslint-disable-next-line unicorn/prefer-private-class-fields
-	_scripts: RedisXLimiterScripts;
+	_script: Script;
 	/** @internal */
 	// eslint-disable-next-line unicorn/prefer-private-class-fields
 	_redis_args: string[];
@@ -29,11 +29,23 @@ export class RedisXLimiter {
 	constructor(
 		redisXClient: RedisXClient,
 		options: {
+			/** Limiter type. Check {@link RedisXLimiterType}. */
 			type: RedisXLimiterType;
+			/**
+			 * Limiter name. Must be unique for current process.
+			 *
+			 * Can contain only letters, digits or `._+-`.
+			 *
+			 * Can only start and end with a letter or digit.
+			 */
 			name: string;
+			/** Limiter priority to return most important limit first when multiple limiters blocked. */
 			priority?: number;
+			/** Maximum number of hits allowed within the TTL; for token bucket, the number of tokens in the bucket. */
 			limit: number;
+			/** Limiter window in **seconds**; for token bucket, the total time for bucket replenishment from empty to full. */
 			ttl: number;
+			/** Time in **seconds** to block the limiter after exceeding the limit. Only hit **exceeding the limit** will put limiter in block state. */
 			block_ttl?: number;
 		},
 	) {
@@ -54,7 +66,7 @@ export class RedisXLimiter {
 			|| options.ttl > MAX_TTL_SECONDS
 		) {
 			throw new TypeError(
-				`Invalid ttl: expected an integer from 1 to ${MAX_TTL_SECONDS} seconds.`,
+				`Invalid ttl: expected a positive integer up to ${MAX_TTL_SECONDS}.`,
 			);
 		}
 
@@ -65,13 +77,13 @@ export class RedisXLimiter {
 				|| options.block_ttl > MAX_TTL_SECONDS)
 		) {
 			throw new TypeError(
-				`Invalid block_ttl: expected an integer from 1 to ${MAX_TTL_SECONDS} seconds.`,
+				`Invalid block_ttl: expected a positive integer up to ${MAX_TTL_SECONDS}.`,
 			);
 		}
 
 		if (LIMITER_NAMES.has(this.name)) {
 			throw new TypeError(
-				'Duplicate limiter name. You can not reuse the same name for multiple limiters.',
+				'Duplicate limiter name. You can not reuse the same name for multiple limiters to avoid conflicts.',
 			);
 		}
 
@@ -81,7 +93,7 @@ export class RedisXLimiter {
 			this.priority = options.priority;
 		}
 
-		this._scripts = createScripts(redisXClient);
+		this._script = createScript(redisXClient);
 
 		this._redis_args = [
 			options.type,
@@ -102,7 +114,33 @@ export class RedisXLimiter {
 		return `${REDIS_PREFIX}:${this.name}`;
 	}
 
-	async hit(key: string | number, hit_id?: string): Promise<void> {
+	#runScript(op: SCRIPT_OP, key: string | number, hit_id?: string | number) {
+		return runScript(
+			this._script,
+			op,
+			key,
+			hit_id,
+			[this._getRedisKey(key)],
+			this._redis_args,
+		);
+	}
+
+	async check(
+		key: string | number,
+		hit_id?: string | number,
+	): Promise<boolean> {
+		return check(await this.#runScript(SCRIPT_OP.GET, key, hit_id));
+	}
+
+	async get(key: string | number, hit_id?: string | number): Promise<void> {
+		const result = await this.#runScript(SCRIPT_OP.GET, key, hit_id);
+	}
+
+	async getAll(key: string | number, hit_id?: string | number): Promise<void> {
+		const result = await this.#runScript(SCRIPT_OP.GET, key, hit_id);
+	}
+
+	async hit(key: string | number, hit_id?: string | number): Promise<void> {
 		if (typeof key === 'string' && !inkey_regex.test(key)) {
 			throw new TypeError('Invalid key.');
 		}
@@ -113,33 +151,27 @@ export class RedisXLimiter {
 			);
 		}
 
-		await hit(
-			this._scripts.hit,
-			key,
-			hit_id,
-			[this._getRedisKey(key)],
-			this._redis_args,
-		);
+		await this.#runScript(SCRIPT_OP.HIT, key, hit_id);
 	}
 }
 
 export class RedisXLimitersBatch {
 	#limiters: RedisXLimiter[];
-	#scripts: RedisXLimiterScripts;
+	#script: Script;
 	#redis_args: string[] = [];
 
 	constructor(...limiters: RedisXLimiter[]) {
 		this.#limiters = [...new Set(limiters)];
 
-		const scripts = this.#limiters[0]?._scripts;
-		if (scripts === undefined) {
+		const script = this.#limiters[0]?._script;
+		if (script === undefined) {
 			throw new TypeError('At least one limiter is required.');
 		}
 
-		this.#scripts = scripts;
+		this.#script = script;
 
 		for (const limiter of this.#limiters) {
-			if (limiter._scripts !== this.#scripts) {
+			if (limiter._script !== this.#script) {
 				throw new Error('All limiters must use the same Redis client.');
 			}
 
@@ -147,13 +179,33 @@ export class RedisXLimitersBatch {
 		}
 	}
 
-	async hit(key: string, hit_id?: string): Promise<void> {
-		await hit(
-			this.#scripts.hit,
+	#runScript(op: SCRIPT_OP, key: string | number, hit_id?: string | number) {
+		return runScript(
+			this.#script,
+			op,
 			key,
 			hit_id,
 			this.#limiters.map((limiter) => limiter._getRedisKey(key)),
 			this.#redis_args,
 		);
+	}
+
+	async check(
+		key: string | number,
+		hit_id?: string | number,
+	): Promise<boolean> {
+		return check(await this.#runScript(SCRIPT_OP.GET, key, hit_id));
+	}
+
+	async get(key: string | number, hit_id?: string | number): Promise<void> {
+		const result = await this.#runScript(SCRIPT_OP.GET, key, hit_id);
+	}
+
+	async getAll(key: string | number, hit_id?: string | number): Promise<void> {
+		const result = await this.#runScript(SCRIPT_OP.GET, key, hit_id);
+	}
+
+	async hit(key: string | number, hit_id?: string | number): Promise<void> {
+		await this.#runScript(SCRIPT_OP.HIT, key, hit_id);
 	}
 }
