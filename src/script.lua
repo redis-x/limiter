@@ -27,13 +27,13 @@ local resp_blocked = redis.call('HTTL', key_block, "FIELDS", #limiters_block_fie
 local result_blocks = {}
 local result_usage = {}
 local result_names = {}
-local function save_result(value)
+local function save_result(type, value)
 	local limiter_name = value[1]
 	if result_names[limiter_name] == nil then
-		if value[2] == 1 then
-			table.insert(result_blocks, value)
-		else
+		if type == 0 then
 			table.insert(result_usage, value)
+		elseif type == 1 then
+			table.insert(result_blocks, value)
 		end
 		result_names[limiter_name] = true
 	end
@@ -41,7 +41,7 @@ end
 for index, limiter in ipairs(limiters) do
 	local ttl = resp_blocked[index]
 	if ttl > 0 then
-		save_result({ limiter.name, 1, ttl })
+		save_result(1, { limiter.name, ttl })
 	end
 end
 
@@ -58,7 +58,7 @@ local function set_block(limiter)
 		-- Blocks persist even when the batch discards all queued usage changes.
 		redis.call("HSET", key_block, limiter.field_block, "")
 		redis.call("HEXPIREAT", key_block, ts + limiter.ttl_block, "FIELDS", 1, limiter.field_block)
-		save_result({ limiter.name, 1, limiter.ttl_block })
+		save_result(1, { limiter.name, limiter.ttl_block })
 	end
 end
 
@@ -112,11 +112,10 @@ for _, limiter in ipairs(limiters) do
 			ttl_reset = ts_expire - ts
 		end
 		if is_exhausted then
-			save_result({ limiter.name, 1, ttl_reset })
+			save_result(1, { limiter.name, ttl_reset })
 		else
-			save_result({
+			save_result(0, {
 				limiter.name,
-				0,
 				math.max(0, limiter.limit - counter),
 				ttl_reset,
 			})
@@ -124,30 +123,30 @@ for _, limiter in ipairs(limiters) do
 	-- ---------------------------------------------------
 	-- sliding window
 	-- ---------------------------------------------------
-	elseif limiter.type == "2" then
-		-- wipe expired
-		redis.call("ZREMRANGEBYSCORE", limiter.key, "-inf", ts)
-		local is_unique = redis.call('ZSCORE', limiter.key, hit_id) == false
-		local ts_expire = ts + limiter.ttl
-		if
-			is_unique
-			and redis.call("ZCARD", limiter.key) >= limiter.limit
-		then
-			if set_block(limiter) ~= true then
-				local resp_score = redis.call("ZRANGE", limiter.key, "-inf", "+inf", "BYSCORE", "LIMIT", 0, 1, "WITHSCORES")[2]
-				table.insert(limiters_blocked, {
-					limiter.name,
-					tonumber(resp_score) - ts
-				})
-			end
-		else
-			table.insert(hit_args, {
-				"ZADD", limiter.key, ts_expire, hit_id,
-			})
-			table.insert(hit_args, {
-				"EXPIREAT", limiter.key, ts_expire,
-			})
-		end
+	-- elseif limiter.type == "2" then
+	-- 	-- wipe expired
+	-- 	redis.call("ZREMRANGEBYSCORE", limiter.key, "-inf", ts)
+	-- 	local is_unique = redis.call('ZSCORE', limiter.key, hit_id) == false
+	-- 	local ts_expire = ts + limiter.ttl
+	-- 	if
+	-- 		is_unique
+	-- 		and redis.call("ZCARD", limiter.key) >= limiter.limit
+	-- 	then
+	-- 		if set_block(limiter) ~= true then
+	-- 			local resp_score = redis.call("ZRANGE", limiter.key, "-inf", "+inf", "BYSCORE", "LIMIT", 0, 1, "WITHSCORES")[2]
+	-- 			table.insert(limiters_blocked, {
+	-- 				limiter.name,
+	-- 				tonumber(resp_score) - ts
+	-- 			})
+	-- 		end
+	-- 	else
+	-- 		table.insert(hit_args, {
+	-- 			"ZADD", limiter.key, ts_expire, hit_id,
+	-- 		})
+	-- 		table.insert(hit_args, {
+	-- 			"EXPIREAT", limiter.key, ts_expire,
+	-- 		})
+	-- 	end
 	-- ---------------------------------------------------
 	-- sliding window with approximation
 	-- ---------------------------------------------------
@@ -239,12 +238,12 @@ end
 
 if op == 2 then
 	if #result_blocks > 0 then
-		return result_blocks
+		return { result_blocks, {} }
 	end
 	for _, args in ipairs(hit_args) do
 		redis.call(unpack(args))
 	end
-	return result_usage
+	return { {}, result_usage }
 end
 
-return { unpack(result_usage), unpack(result_blocks) }
+return { result_blocks, result_usage }

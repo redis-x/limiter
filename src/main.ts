@@ -1,6 +1,14 @@
 import type { RedisXClient } from '@redis-x/client';
 import { check, createScript, runScript, SCRIPT_OP } from './scripts.js';
+import {
+	getLongestBlock,
+	getSmallestLimit,
+	type RedisXLimiterBlock,
+	type RedisXLimiterUsage,
+} from './state.js';
 import { REDIS_PREFIX, type Script } from './utils.js';
+
+export type { UsageState } from './scripts.js';
 
 export enum RedisXLimiterType {
 	FixedWindow = '0',
@@ -14,6 +22,17 @@ const inkey_regex = /^[a-z\d](?:[a-z\d._+-]*[a-z\d])?$/iu;
 // Bound durations so calculated deadlines stay within Redis hash-field expiration limits.
 const MAX_TTL_SECONDS = 2_147_483_647;
 const LIMITER_NAMES = new Set<string>();
+
+export class RedisXLimiterExceededError extends Error {
+	override readonly name = 'RedisXLimiterExceededError';
+
+	constructor(
+		readonly limiter: RedisXLimiter,
+		readonly ttl: number,
+	) {
+		super('Limit exceeded.');
+	}
+}
 
 export class RedisXLimiter {
 	readonly type: RedisXLimiterType;
@@ -132,15 +151,30 @@ export class RedisXLimiter {
 		return check(await this.#runScript(SCRIPT_OP.GET, key, hit_id));
 	}
 
-	async get(key: string | number, hit_id?: string | number): Promise<void> {
-		const result = await this.#runScript(SCRIPT_OP.GET, key, hit_id);
+	async get(
+		key: string | number,
+		hit_id?: string | number,
+	): Promise<RedisXLimiterBlock | RedisXLimiterUsage> {
+		const state = await this.#runScript(SCRIPT_OP.GET, key, hit_id);
+		if (state.block.size > 0) {
+			return {
+				limiter: this,
+				ttl: state.block.get(this.name)!.ttl,
+			};
+		}
+
+		const { remaining, ttl } = state.usage.get(this.name)!;
+		return {
+			limiter: this,
+			remaining,
+			ttl,
+		};
 	}
 
-	async getAll(key: string | number, hit_id?: string | number): Promise<void> {
-		const result = await this.#runScript(SCRIPT_OP.GET, key, hit_id);
-	}
-
-	async hit(key: string | number, hit_id?: string | number): Promise<void> {
+	async hit(
+		key: string | number,
+		hit_id?: string | number,
+	): Promise<RedisXLimiterUsage> {
 		if (typeof key === 'string' && !inkey_regex.test(key)) {
 			throw new TypeError('Invalid key.');
 		}
@@ -151,7 +185,20 @@ export class RedisXLimiter {
 			);
 		}
 
-		await this.#runScript(SCRIPT_OP.HIT, key, hit_id);
+		const state = await this.#runScript(SCRIPT_OP.HIT, key, hit_id);
+		if (state.block.size > 0) {
+			throw new RedisXLimiterExceededError(
+				this,
+				state.block.get(this.name)!.ttl,
+			);
+		}
+
+		const { remaining, ttl } = state.usage.get(this.name)!;
+		return {
+			limiter: this,
+			remaining,
+			ttl,
+		};
 	}
 }
 
@@ -197,15 +244,49 @@ export class RedisXLimitersBatch {
 		return check(await this.#runScript(SCRIPT_OP.GET, key, hit_id));
 	}
 
-	async get(key: string | number, hit_id?: string | number): Promise<void> {
-		const result = await this.#runScript(SCRIPT_OP.GET, key, hit_id);
+	async get(
+		key: string | number,
+		hit_id?: string | number,
+	): Promise<RedisXLimiterBlock | RedisXLimiterUsage> {
+		const state = await this.#runScript(SCRIPT_OP.GET, key, hit_id);
+		if (state.block.size > 0) {
+			return getLongestBlock(this.#limiters, state.block);
+		}
+
+		return getSmallestLimit(this.#limiters, state.usage);
 	}
 
-	async getAll(key: string | number, hit_id?: string | number): Promise<void> {
-		const result = await this.#runScript(SCRIPT_OP.GET, key, hit_id);
+	async getAll(
+		key: string | number,
+		hit_id?: string | number,
+	): Promise<(RedisXLimiterBlock | RedisXLimiterUsage)[]> {
+		const state = await this.#runScript(SCRIPT_OP.GET, key, hit_id);
+		const result: (RedisXLimiterBlock | RedisXLimiterUsage)[] = [];
+		for (const limiter of this.#limiters) {
+			if (state.block.has(limiter.name)) {
+				const { ttl } = state.block.get(limiter.name)!;
+				result.push({ limiter, ttl });
+			}
+
+			if (state.usage.has(limiter.name)) {
+				const { remaining, ttl } = state.usage.get(limiter.name)!;
+				result.push({ limiter, remaining, ttl });
+			}
+		}
+
+		return result;
 	}
 
-	async hit(key: string | number, hit_id?: string | number): Promise<void> {
-		await this.#runScript(SCRIPT_OP.HIT, key, hit_id);
+	async hit(
+		key: string | number,
+		hit_id?: string | number,
+	): Promise<RedisXLimiterUsage> {
+		const state = await this.#runScript(SCRIPT_OP.HIT, key, hit_id);
+		if (state.block.size > 0) {
+			const { limiter, ttl } = getLongestBlock(this.#limiters, state.block);
+			throw new RedisXLimiterExceededError(limiter, ttl);
+		}
+
+		return getSmallestLimit(this.#limiters, state.usage);
 	}
 }

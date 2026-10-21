@@ -1,5 +1,6 @@
 import type { RedisXClient } from '@redis-x/client';
 import { nanoid } from 'nanoid';
+import type { RedisXLimiter } from './main.js';
 import lua_script from './script.lua' with { type: 'text' };
 import { REDIS_PREFIX, type Script } from './utils.js';
 
@@ -20,28 +21,25 @@ export function createScript(redisXClient: RedisXClient): Script {
 	return script;
 }
 
-class ScriptResultError extends Error {
+export class ScriptResultError extends Error {
 	constructor() {
 		super('Script result is not valid.');
 	}
 }
 
-type UsageState = {
+export type UsageState = {
 	name: string;
-	usage: {
-		remaining: number;
-		ttl?: number;
-	};
+	remaining: number;
+	ttl?: number;
 };
-
-type BlockState = {
+export type BlockState = {
 	name: string;
-	block: {
-		ttl: number;
-	};
+	ttl: number;
 };
-
-type LimiterState = UsageState | BlockState;
+export type State = {
+	block: ReadonlyMap<string, BlockState>;
+	usage: ReadonlyMap<string, UsageState>;
+};
 
 /**
  * Reads or hits limiters. Rejected hits may create blocks but never consume usage.
@@ -54,7 +52,7 @@ export async function runScript(
 	hit_id: string | number | undefined,
 	redis_keys: string[],
 	redis_args: string[],
-): Promise<ReadonlyMap<string, LimiterState>> {
+): Promise<State> {
 	const result = await redisXScript.executeWithKeys(
 		[`${REDIS_PREFIX}:_block`, ...redis_keys],
 		op,
@@ -67,60 +65,63 @@ export async function runScript(
 		throw new ScriptResultError();
 	}
 
-	const states = new Map<string, LimiterState>();
-	for (const result_limiter of result) {
+	const [result_block, result_usage] = result;
+	if (!Array.isArray(result_block) || !Array.isArray(result_usage)) {
+		throw new ScriptResultError();
+	}
+
+	const block = new Map<string, BlockState>();
+	for (const result_limiter of result_block) {
 		if (!Array.isArray(result_limiter)) {
 			throw new ScriptResultError();
 		}
 
-		const [limiter_name, status] = result_limiter;
-		if (typeof limiter_name !== 'string' || !(status === 0 || status === 1)) {
+		const [limiter_name, ttl] = result_limiter;
+		if (typeof limiter_name !== 'string' || typeof ttl !== 'number') {
 			throw new ScriptResultError();
 		}
 
-		if (status === 0) {
-			const remaining = result_limiter[2];
-			const ttl = result_limiter[3];
-			if (
-				typeof remaining !== 'number'
-				|| (ttl !== undefined && typeof ttl !== 'number')
-			) {
-				throw new ScriptResultError();
-			}
-
-			states.set(limiter_name, {
-				name: limiter_name,
-				usage: {
-					remaining,
-					ttl,
-				},
-			});
-		} else {
-			const ttl = result_limiter[2];
-			if (typeof ttl !== 'number') {
-				throw new ScriptResultError();
-			}
-
-			states.set(limiter_name, {
-				name: limiter_name,
-				block: {
-					ttl,
-				},
-			});
-		}
+		block.set(limiter_name, {
+			name: limiter_name,
+			ttl,
+		});
 	}
 
-	console.log(states);
+	const usage = new Map<string, UsageState>();
+	for (const result_limiter of result_usage) {
+		if (!Array.isArray(result_limiter)) {
+			throw new ScriptResultError();
+		}
 
-	return states;
+		const [limiter_name, remaining, ttl] = result_limiter;
+		if (
+			typeof limiter_name !== 'string'
+			|| typeof remaining !== 'number'
+			|| (ttl !== undefined && typeof ttl !== 'number')
+		) {
+			throw new ScriptResultError();
+		}
+
+		usage.set(limiter_name, {
+			name: limiter_name,
+			remaining,
+			ttl,
+		});
+	}
+
+	console.log(block, usage);
+
+	return {
+		block,
+		usage,
+	};
 }
 
-export function check(states: ReadonlyMap<string, LimiterState>) {
-	for (const state of states.values()) {
-		if ('block' in state || state.usage.remaining <= 0) {
-			return false;
-		}
-	}
-
-	return true;
+/** Returns whether all reported limiters have capacity for another hit. */
+// eslint-disable-next-line unicorn/consistent-boolean-name -- Matches the public check methods.
+export function check(state: State): boolean {
+	return (
+		state.block.size === 0
+		&& state.usage.values().every(({ remaining }) => remaining > 0)
+	);
 }
