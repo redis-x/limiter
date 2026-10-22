@@ -67,15 +67,15 @@ export declare class RedisXLimiter {
     block_ttl?: number;
   });
   check(key: string | number, hit_id?: string | number): Promise<boolean>;
-  get(key: string | number, hit_id?: string | number): Promise<RedisXLimiterBlock | RedisXLimiterUsage>;
+  get(key: string | number): Promise<RedisXLimiterBlock | RedisXLimiterUsage>;
   hit(key: string | number, hit_id?: string | number): Promise<RedisXLimiterUsage>;
 }
 export declare class RedisXLimitersBatch {
   #private;
   constructor(...limiters: RedisXLimiter[]);
   check(key: string | number, hit_id?: string | number): Promise<boolean>;
-  get(key: string | number, hit_id?: string | number): Promise<RedisXLimiterBlock | RedisXLimiterUsage>;
-  getAll(key: string | number, hit_id?: string | number): Promise<(RedisXLimiterBlock | RedisXLimiterUsage)[]>;
+  get(key: string | number): Promise<RedisXLimiterBlock | RedisXLimiterUsage>;
+  getAll(key: string | number): Promise<(RedisXLimiterBlock | RedisXLimiterUsage)[]>;
   hit(key: string | number, hit_id?: string | number): Promise<RedisXLimiterUsage>;
 }
 //#endregion

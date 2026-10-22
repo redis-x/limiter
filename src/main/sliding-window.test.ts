@@ -91,7 +91,7 @@ async function expectRejectedHit(
 
 test('an empty window reports full capacity and the first hit sets member and key expiration', async () => {
 	expect(await limiter.check('subject', 'first')).toBe(true);
-	expect(await limiter.get('subject', 'first')).toEqual({
+	expect(await limiter.get('subject')).toEqual({
 		limiter,
 		remaining: 3,
 		ttl: 0,
@@ -127,7 +127,7 @@ test('expired members are ignored by reads and removed when an expired ID takes 
 	await setWindow(otherKey, { unrelated: before + 120 });
 
 	expect(await blockingLimiter.check('subject', 'expired')).toBe(true);
-	const current = await blockingLimiter.get('subject', 'expired');
+	const current = await blockingLimiter.get('subject');
 	expect(current).toEqual({
 		limiter: blockingLimiter,
 		remaining: 1,
@@ -168,14 +168,12 @@ test('an active repeated ID at full capacity refreshes expiration without consum
 	await setWindow(blockingKey, members);
 
 	expect(await blockingLimiter.check('subject', 'first')).toBe(true);
-	const current = await blockingLimiter.get('subject', 'first');
+	const current = await blockingLimiter.get('subject');
 	expect(current).toEqual({
 		limiter: blockingLimiter,
-		remaining: 0,
 		ttl: expect.any(Number),
-		is_hit_unique: false,
 	});
-	expectTtl(current.ttl, members.last, [before, await redisTime()]);
+	expectTtl(current.ttl, members.first, [before, await redisTime()]);
 	expect(await readWindow(blockingKey)).toEqual(members);
 	expect(await redisXClient.EXPIRETIME(blockingKey)).toBe(members.last);
 
@@ -208,7 +206,7 @@ test('exhaustion rejects a new or expired ID with the earliest active deadline a
 
 	expect(await limiter.check('subject')).toBe(false);
 	expect(await limiter.check('subject', 'expired')).toBe(false);
-	const current = await limiter.get('subject', 'expired');
+	const current = await limiter.get('subject');
 	expect(current).toEqual({ limiter, ttl: expect.any(Number) });
 	await expectRejectedHit(limiter, members.first, 'expired');
 	expectTtl(current.ttl, members.first, [before, await redisTime()]);
@@ -227,7 +225,7 @@ test('an exceeding hit creates an independent block and preserves the sorted set
 	await setWindow(blockingKey, members);
 
 	expect(await blockingLimiter.check('subject', 'new')).toBe(false);
-	const current = await blockingLimiter.get('subject', 'new');
+	const current = await blockingLimiter.get('subject');
 	expect(current).toEqual({
 		limiter: blockingLimiter,
 		ttl: expect.any(Number),
@@ -262,7 +260,7 @@ test('an existing block rejects even repeated IDs without refreshing either dead
 	await setHashField(blockKey, blockField, { value: '', deadline });
 
 	expect(await blockingLimiter.check('subject', 'first')).toBe(false);
-	const current = await blockingLimiter.get('subject', 'first');
+	const current = await blockingLimiter.get('subject');
 	expect(current).toEqual({
 		limiter: blockingLimiter,
 		ttl: expect.any(Number),
@@ -282,7 +280,7 @@ test('a block remains enforced after the sorted-set key expires', async () => {
 	await setHashField(blockKey, blockField, { value: '', deadline });
 
 	expect(await blockingLimiter.check('subject', 'new')).toBe(false);
-	const current = await blockingLimiter.get('subject', 'new');
+	const current = await blockingLimiter.get('subject');
 	expect(current).toEqual({
 		limiter: blockingLimiter,
 		ttl: expect.any(Number),
@@ -302,7 +300,7 @@ test('expired usage and block state allow a new sorted set', async () => {
 	expect(await redisXClient.EXPIRETIME(blockingKey)).toBe(-2);
 	expect(await hashFieldExpiration(blockKey, blockField)).toBe(-2);
 	expect(await blockingLimiter.check('subject', 'new')).toBe(true);
-	expect(await blockingLimiter.get('subject', 'new')).toEqual({
+	expect(await blockingLimiter.get('subject')).toEqual({
 		limiter: blockingLimiter,
 		remaining: 3,
 		ttl: 0,

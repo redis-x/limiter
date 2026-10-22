@@ -158,8 +158,8 @@ var RedisXLimiter = class {
 	async check(key, hit_id) {
 		return check(await this.#runScript("1", key, hit_id));
 	}
-	async get(key, hit_id) {
-		const state = await this.#runScript("1", key, hit_id);
+	async get(key) {
+		const state = await this.#runScript("1", key);
 		if (state.block.size > 0) return {
 			limiter: this,
 			ttl: state.block.get(this.name).ttl
@@ -206,13 +206,13 @@ var RedisXLimitersBatch = class {
 	async check(key, hit_id) {
 		return check(await this.#runScript("1", key, hit_id));
 	}
-	async get(key, hit_id) {
-		const state = await this.#runScript("1", key, hit_id);
+	async get(key) {
+		const state = await this.#runScript("1", key);
 		if (state.block.size > 0) return getLongestBlock(this.#limiters, state.block);
 		return getSmallestLimit(this.#limiters, state.usage);
 	}
-	async getAll(key, hit_id) {
-		const state = await this.#runScript("1", key, hit_id);
+	async getAll(key) {
+		const state = await this.#runScript("1", key);
 		const result = [];
 		for (const limiter of this.#limiters) {
 			if (state.block.has(limiter.name)) {

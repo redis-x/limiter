@@ -153,9 +153,8 @@ export class RedisXLimiter {
 
 	async get(
 		key: string | number,
-		hit_id?: string | number,
 	): Promise<RedisXLimiterBlock | RedisXLimiterUsage> {
-		const state = await this.#runScript(SCRIPT_OP.GET, key, hit_id);
+		const state = await this.#runScript(SCRIPT_OP.GET, key);
 		if (state.block.size > 0) {
 			return {
 				limiter: this,
@@ -248,9 +247,8 @@ export class RedisXLimitersBatch {
 
 	async get(
 		key: string | number,
-		hit_id?: string | number,
 	): Promise<RedisXLimiterBlock | RedisXLimiterUsage> {
-		const state = await this.#runScript(SCRIPT_OP.GET, key, hit_id);
+		const state = await this.#runScript(SCRIPT_OP.GET, key);
 		if (state.block.size > 0) {
 			return getLongestBlock(this.#limiters, state.block);
 		}
@@ -260,9 +258,8 @@ export class RedisXLimitersBatch {
 
 	async getAll(
 		key: string | number,
-		hit_id?: string | number,
 	): Promise<(RedisXLimiterBlock | RedisXLimiterUsage)[]> {
-		const state = await this.#runScript(SCRIPT_OP.GET, key, hit_id);
+		const state = await this.#runScript(SCRIPT_OP.GET, key);
 		const result: (RedisXLimiterBlock | RedisXLimiterUsage)[] = [];
 		for (const limiter of this.#limiters) {
 			if (state.block.has(limiter.name)) {
