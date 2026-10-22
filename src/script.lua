@@ -225,43 +225,52 @@ for _, limiter in ipairs(limiters) do
 	-- ---------------------------------------------------
 	-- token bucket
 	-- ---------------------------------------------------
--- 	elseif limiter.type == "4" then
--- 		local value = redis.call("HGET", limiter.key, limiting_key)
--- 		local counter = tonumber(value) or 0
--- 		local ts_anchor = ts
--- 		if counter > 0 then
--- 			local ts_expire = redis.call("HEXPIRETIME", limiter.key, "FIELDS", 1, limiting_key)[1]
--- 			if ts_expire > ts then
--- 				ts_anchor = ts_expire - math.ceil(counter * limiter.ttl / limiter.limit)
--- 			else
--- 				counter = 0
--- 			end
--- 		end
---
--- 		-- Rebase by one capacity without changing the represented refill progress.
--- 		if counter == limiter.limit then
--- 			counter = 0
--- 			ts_anchor = ts_anchor + limiter.ttl
--- 		end
--- 		counter = counter + 1
--- 		-- Round the cumulative duration, not each individual token's refill time.
--- 		local ts_expire = ts_anchor + math.ceil(counter * limiter.ttl / limiter.limit)
--- 		local ttl_retry = ts_expire - ts - limiter.ttl
--- 		if ttl_retry > 0 then
--- 			if set_block(limiter) ~= true then
--- 				table.insert(limiters_blocked, {
--- 					limiter.name,
--- 					ttl_retry
--- 				})
--- 			end
--- 		else
--- 			table.insert(hit_args, {
--- 				"HSET", limiter.key, limiting_key, string.format("%.0f", counter),
--- 			})
--- 			table.insert(hit_args, {
--- 				"HEXPIREAT", limiter.key, ts_expire, "FIELDS", 1, limiting_key,
--- 			})
--- 		end
+	elseif limiter.type == "4" then
+		local value = redis.call("HGET", limiter.key, limiting_key)
+		local counter = tonumber(value) or 0
+		local ts_anchor = ts
+		local ts_expire = ts
+		if counter > 0 then
+			ts_expire = redis.call("HEXPIRETIME", limiter.key, "FIELDS", 1, limiting_key)[1]
+			if ts_expire > ts then
+				ts_anchor = ts_expire - math.ceil(counter * limiter.ttl / limiter.limit)
+			else
+				counter = 0
+				ts_expire = ts
+			end
+		end
+
+		-- Rebase by one capacity without changing the represented refill progress.
+		if counter == limiter.limit then
+			counter = 0
+			ts_anchor = ts_anchor + limiter.ttl
+		end
+		local remaining = limiter.limit - counter + math.floor((ts - ts_anchor) * limiter.limit / limiter.ttl)
+		counter = counter + 1
+		-- Round the cumulative duration, not each individual token's refill time.
+		local ts_next = ts_anchor + math.ceil(counter * limiter.ttl / limiter.limit)
+		local ttl_retry = ts_next - ts - limiter.ttl
+		if ttl_retry > 0 then
+			set_block(limiter)
+			save_result(1, { limiter.name, ttl_retry })
+		else
+			if op == 2 then
+				table.insert(hit_args, {
+					"HSET", limiter.key, limiting_key, string.format("%.0f", counter),
+				})
+				table.insert(hit_args, {
+					"HEXPIREAT", limiter.key, ts_next, "FIELDS", 1, limiting_key,
+				})
+				remaining = remaining - 1
+				ts_expire = ts_next
+			end
+			-- Usage returns full refill; exhaustion above returns the next whole token.
+			save_result(0, {
+				limiter.name,
+				math.max(0, math.min(limiter.limit, remaining)),
+				ts_expire - ts,
+			})
+		end
 	else
 		return redis.error_reply("UNSUP unsupported limiter type " .. limiter.type)
 	end
