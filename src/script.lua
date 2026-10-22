@@ -167,47 +167,61 @@ for _, limiter in ipairs(limiters) do
 	-- ---------------------------------------------------
 	-- sliding window with approximation
 	-- ---------------------------------------------------
-	-- elseif limiter.type == "3" then
-	-- 	local epoch = get_epoch(limiter.ttl)
-	-- 	local ttl_remaining = limiter.ttl - (ts % limiter.ttl)
-	-- 	local field_previous = epoch - 1 .. ":" .. limiting_key
-	-- 	local field_current = epoch .. ":" .. limiting_key
-	-- 	local resp = redis.call("HMGET", limiter.key, field_previous, field_current)
-	-- 	local counter_previous = tonumber(resp[1]) or 0
-	-- 	local counter_current = tonumber(resp[2]) or 0
-	-- 	local counter = counter_previous * ttl_remaining / limiter.ttl + counter_current
-	-- 	if counter + 1 > limiter.limit then
-	-- 		if set_block(limiter) ~= true then
-	-- 			local ttl_retry
-	-- 			if counter_current < limiter.limit then
-	-- 				-- Previous usage decays enough before this window ends.
-	-- 				local capacity_previous = limiter.limit - counter_current - 1
-	-- 				ttl_retry = math.ceil(
-	-- 					(counter_previous * ttl_remaining - capacity_previous * limiter.ttl) / counter_previous
-	-- 				)
-	-- 			else
-	-- 				-- Current usage can only decay after becoming the previous window.
-	-- 				ttl_retry = ttl_remaining + math.ceil(
-	-- 					(counter_current - limiter.limit + 1) * limiter.ttl / counter_current
-	-- 				)
-	-- 			end
-	-- 			table.insert(limiters_blocked, {
-	-- 				limiter.name,
-	-- 				ttl_retry
-	-- 			})
-	-- 		end
-	-- 	elseif counter_current == 0 then
-	-- 		table.insert(hit_args, {
-	-- 			"HSET", limiter.key, field_current, 1,
-	-- 		})
-	-- 		table.insert(hit_args, {
-	-- 			"HEXPIREAT", limiter.key, get_epoch_ts_end(epoch + 1, limiter.ttl), "FIELDS", 1, field_current,
-	-- 		})
-	-- 	else
-	-- 		table.insert(hit_args, {
-	-- 			"HINCRBY", limiter.key, field_current, 1,
-	-- 		})
-	-- 	end
+	elseif limiter.type == "3" then
+		local epoch = get_epoch(limiter.ttl)
+		local ttl_remaining = limiter.ttl - (ts % limiter.ttl)
+		local field_previous = epoch - 1 .. ":" .. limiting_key
+		local field_current = epoch .. ":" .. limiting_key
+		local resp = redis.call("HMGET", limiter.key, field_previous, field_current)
+		local counter_previous = tonumber(resp[1]) or 0
+		local counter_current = tonumber(resp[2]) or 0
+		local counter = counter_previous * ttl_remaining / limiter.ttl + counter_current
+		if counter + 1 > limiter.limit then
+			set_block(limiter)
+			local ttl_retry
+			if counter_current < limiter.limit then
+				-- Previous usage decays enough before this window ends.
+				local capacity_previous = limiter.limit - counter_current - 1
+				ttl_retry = math.ceil(
+					(counter_previous * ttl_remaining - capacity_previous * limiter.ttl) / counter_previous
+				)
+			else
+				-- Current usage can only decay after becoming the previous window.
+				ttl_retry = ttl_remaining + math.ceil(
+					(counter_current - limiter.limit + 1) * limiter.ttl / counter_current
+				)
+			end
+			save_result(1, { limiter.name, ttl_retry })
+		else
+			if op == 2 then
+				if counter_current == 0 then
+					table.insert(hit_args, {
+						"HSET", limiter.key, field_current, 1,
+					})
+					table.insert(hit_args, {
+						"HEXPIREAT", limiter.key, get_epoch_ts_end(epoch + 1, limiter.ttl), "FIELDS", 1, field_current,
+					})
+				else
+					table.insert(hit_args, {
+						"HINCRBY", limiter.key, field_current, 1,
+					})
+				end
+				counter_current = counter_current + 1
+				counter = counter + 1
+			end
+			-- Usage reports full recovery, not the next available whole hit.
+			local ttl_reset = 0
+			if counter_current > 0 then
+				ttl_reset = ttl_remaining + limiter.ttl
+			elseif counter_previous > 0 then
+				ttl_reset = ttl_remaining
+			end
+			save_result(0, {
+				limiter.name,
+				math.max(0, math.floor(limiter.limit - counter)),
+				ttl_reset,
+			})
+		end
 	-- ---------------------------------------------------
 	-- token bucket
 	-- ---------------------------------------------------
