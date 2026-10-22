@@ -107,7 +107,7 @@ for _, limiter in ipairs(limiters) do
 
 		-- Fixed-window quota fully resets at its deadline. Exhaustion recovers
 		-- then too; a separately stored block retains its own expiration.
-		local ttl_reset = nil
+		local ttl_reset = -1
 		if ts_expire ~= nil then
 			ttl_reset = ts_expire - ts
 		end
@@ -123,30 +123,47 @@ for _, limiter in ipairs(limiters) do
 	-- ---------------------------------------------------
 	-- sliding window
 	-- ---------------------------------------------------
-	-- elseif limiter.type == "2" then
-	-- 	-- wipe expired
-	-- 	redis.call("ZREMRANGEBYSCORE", limiter.key, "-inf", ts)
-	-- 	local is_unique = redis.call('ZSCORE', limiter.key, hit_id) == false
-	-- 	local ts_expire = ts + limiter.ttl
-	-- 	if
-	-- 		is_unique
-	-- 		and redis.call("ZCARD", limiter.key) >= limiter.limit
-	-- 	then
-	-- 		if set_block(limiter) ~= true then
-	-- 			local resp_score = redis.call("ZRANGE", limiter.key, "-inf", "+inf", "BYSCORE", "LIMIT", 0, 1, "WITHSCORES")[2]
-	-- 			table.insert(limiters_blocked, {
-	-- 				limiter.name,
-	-- 				tonumber(resp_score) - ts
-	-- 			})
-	-- 		end
-	-- 	else
-	-- 		table.insert(hit_args, {
-	-- 			"ZADD", limiter.key, ts_expire, hit_id,
-	-- 		})
-	-- 		table.insert(hit_args, {
-	-- 			"EXPIREAT", limiter.key, ts_expire,
-	-- 		})
-	-- 	end
+	elseif limiter.type == "2" then
+		-- Reads ignore expired members without changing the sorted set.
+		local active_min = "(" .. ts
+		local counter = redis.call("ZCOUNT", limiter.key, active_min, "+inf")
+		local score = tonumber(redis.call("ZSCORE", limiter.key, hit_id))
+		local is_unique = score == nil or score <= ts
+		if is_unique and counter >= limiter.limit then
+			set_block(limiter)
+			-- Wait until enough members expire to admit one new distinct ID.
+			local next_score = redis.call("ZRANGE", limiter.key, active_min, "+inf", "BYSCORE", "LIMIT", counter - limiter.limit, 1, "WITHSCORES")[2]
+			save_result(1, { limiter.name, tonumber(next_score) - ts })
+		else
+			local ts_expire = ts
+			if counter > 0 then
+				ts_expire = tonumber(redis.call("ZRANGE", limiter.key, -1, -1, "WITHSCORES")[2])
+			end
+			if op == 2 then
+				local hit_expire = ts + limiter.ttl
+				ts_expire = math.max(ts_expire, hit_expire)
+				-- Cleanup, insertion, and refresh commit only when every limiter accepts.
+				table.insert(hit_args, {
+					"ZREMRANGEBYSCORE", limiter.key, "-inf", ts,
+				})
+				table.insert(hit_args, {
+					"ZADD", limiter.key, hit_expire, hit_id,
+				})
+				table.insert(hit_args, {
+					"EXPIREAT", limiter.key, ts_expire,
+				})
+				if is_unique then
+					counter = counter + 1
+				end
+			end
+			-- Full recovery uses the latest deadline; a repeat costs no new slot.
+			save_result(0, {
+				limiter.name,
+				math.max(0, limiter.limit - counter),
+				ts_expire - ts,
+				is_unique and 1 or 0,
+			})
+		end
 	-- ---------------------------------------------------
 	-- sliding window with approximation
 	-- ---------------------------------------------------

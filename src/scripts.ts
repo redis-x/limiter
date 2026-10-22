@@ -30,6 +30,11 @@ export type UsageState = {
 	name: string;
 	remaining: number;
 	ttl?: number;
+	/**
+	 * False only for an active repeated sliding-window hit ID before this operation.
+	 * True for every hit in other limiter types and new or expired sliding-window IDs.
+	 */
+	is_hit_unique: boolean;
 };
 export type BlockState = {
 	name: string;
@@ -94,11 +99,14 @@ export async function runScript(
 			throw new ScriptResultError();
 		}
 
-		const [limiter_name, remaining, ttl] = result_limiter;
+		const [limiter_name, remaining, ttl, is_hit_unique] = result_limiter;
 		if (
 			typeof limiter_name !== 'string'
 			|| typeof remaining !== 'number'
-			|| (ttl !== undefined && typeof ttl !== 'number')
+			|| typeof ttl !== 'number'
+			|| (is_hit_unique !== undefined
+				&& is_hit_unique !== 0
+				&& is_hit_unique !== 1)
 		) {
 			throw new ScriptResultError();
 		}
@@ -106,7 +114,8 @@ export async function runScript(
 		usage.set(limiter_name, {
 			name: limiter_name,
 			remaining,
-			ttl,
+			ttl: ttl === -1 ? undefined : ttl,
+			is_hit_unique: is_hit_unique !== 0,
 		});
 	}
 
@@ -116,11 +125,13 @@ export async function runScript(
 	};
 }
 
-/** Returns whether all reported limiters have capacity for another hit. */
+/** Requires every limiter to allow the hit, including active repeated IDs. */
 // eslint-disable-next-line unicorn/consistent-boolean-name -- Matches the public check methods.
 export function check(state: State): boolean {
 	return (
 		state.block.size === 0
-		&& state.usage.values().every(({ remaining }) => remaining > 0)
+		&& state.usage
+			.values()
+			.every(({ remaining, is_hit_unique }) => remaining > 0 || !is_hit_unique)
 	);
 }

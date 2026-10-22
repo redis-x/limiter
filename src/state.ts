@@ -9,6 +9,11 @@ export type RedisXLimiterUsage = {
 	limiter: RedisXLimiter;
 	remaining: number;
 	ttl?: number;
+	/**
+	 * False only for an active repeated sliding-window hit ID before this operation.
+	 * True for every hit in other limiter types and new or expired sliding-window IDs.
+	 */
+	is_hit_unique: boolean;
 };
 
 /** Finds the longest block among the given limiters. */
@@ -72,5 +77,6 @@ export function getSmallestLimit(
 		limiter: limiters.find((limiter) => limiter.name === usage_state.name)!,
 		remaining: usage_state.remaining,
 		ttl: usage_state.ttl,
+		is_hit_unique: usage_state.is_hit_unique,
 	};
 }

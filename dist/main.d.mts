@@ -4,6 +4,11 @@ type UsageState = {
   name: string;
   remaining: number;
   ttl?: number;
+  /**
+   * False only for an active repeated sliding-window hit ID before this operation.
+   * True for every hit in other limiter types and new or expired sliding-window IDs.
+   */
+  is_hit_unique: boolean;
 };
 //#endregion
 //#region src/state.d.ts
@@ -15,6 +20,11 @@ type RedisXLimiterUsage = {
   limiter: RedisXLimiter;
   remaining: number;
   ttl?: number;
+  /**
+   * False only for an active repeated sliding-window hit ID before this operation.
+   * True for every hit in other limiter types and new or expired sliding-window IDs.
+   */
+  is_hit_unique: boolean;
 };
 //#endregion
 //#region src/main.d.ts

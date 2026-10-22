@@ -163,11 +163,12 @@ export class RedisXLimiter {
 			};
 		}
 
-		const { remaining, ttl } = state.usage.get(this.name)!;
+		const { remaining, ttl, is_hit_unique } = state.usage.get(this.name)!;
 		return {
 			limiter: this,
 			remaining,
 			ttl,
+			is_hit_unique,
 		};
 	}
 
@@ -193,11 +194,12 @@ export class RedisXLimiter {
 			);
 		}
 
-		const { remaining, ttl } = state.usage.get(this.name)!;
+		const { remaining, ttl, is_hit_unique } = state.usage.get(this.name)!;
 		return {
 			limiter: this,
 			remaining,
 			ttl,
+			is_hit_unique,
 		};
 	}
 }
@@ -269,8 +271,10 @@ export class RedisXLimitersBatch {
 			}
 
 			if (state.usage.has(limiter.name)) {
-				const { remaining, ttl } = state.usage.get(limiter.name)!;
-				result.push({ limiter, remaining, ttl });
+				const { remaining, ttl, is_hit_unique } = state.usage.get(
+					limiter.name,
+				)!;
+				result.push({ limiter, remaining, ttl, is_hit_unique });
 			}
 		}
 

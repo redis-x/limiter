@@ -70,7 +70,12 @@ async function expectRejectedHit(instance: RedisXLimiter, deadline: number) {
 test('an empty window reports full capacity and the first hit sets an aligned deadline', async () => {
 	expect(await limiter.check('subject')).toBe(true);
 	const initial = await limiter.get('subject');
-	expect(initial).toEqual({ limiter, remaining: 3, ttl: expect.any(Number) });
+	expect(initial).toStrictEqual({
+		limiter,
+		remaining: 3,
+		ttl: expect.any(Number),
+		is_hit_unique: true,
+	});
 	expect(initial.ttl).toBeGreaterThan(0);
 	expect(initial.ttl).toBeLessThanOrEqual(ttl);
 	expect(await redisXClient.EXISTS(key, blockKey)).toBe(0);
@@ -78,7 +83,12 @@ test('an empty window reports full capacity and the first hit sets an aligned de
 	const before = await redisTime();
 	const hit = await limiter.hit('subject');
 	const after = await redisTime();
-	expect(hit).toEqual({ limiter, remaining: 2, ttl: expect.any(Number) });
+	expect(hit).toStrictEqual({
+		limiter,
+		remaining: 2,
+		ttl: expect.any(Number),
+		is_hit_unique: true,
+	});
 	expect(await redisXClient.HGETALL(key)).toEqual({ subject: '1' });
 	const deadline = await hashFieldExpiration(key, 'subject');
 	expect(deadline % ttl).toBe(0);
@@ -97,13 +107,23 @@ test('a partially used window increments only its subject and preserves expirati
 
 	expect(await limiter.check('subject')).toBe(true);
 	const current = await limiter.get('subject');
-	expect(current).toEqual({ limiter, remaining: 2, ttl: expect.any(Number) });
+	expect(current).toEqual({
+		limiter,
+		remaining: 2,
+		ttl: expect.any(Number),
+		is_hit_unique: true,
+	});
 	expect(await redisXClient.HGETALL(key)).toEqual({ subject: '1', other: '3' });
 	expect(await hashFieldExpiration(key, 'subject')).toBe(deadline);
 
 	const hit = await limiter.hit('subject');
 	const after = await redisTime();
-	expect(hit).toEqual({ limiter, remaining: 1, ttl: expect.any(Number) });
+	expect(hit).toEqual({
+		limiter,
+		remaining: 1,
+		ttl: expect.any(Number),
+		is_hit_unique: true,
+	});
 	expectTtl(current.ttl, deadline, [before, after]);
 	expectTtl(hit.ttl, deadline, [before, after]);
 	expect(await redisXClient.HGETALL(key)).toEqual({ subject: '2', other: '3' });
@@ -124,6 +144,7 @@ test('the last available hit succeeds without creating a block', async () => {
 		limiter: blockingLimiter,
 		remaining: 1,
 		ttl: expect.any(Number),
+		is_hit_unique: true,
 	});
 	const hit = await blockingLimiter.hit('subject');
 	const after = await redisTime();
@@ -131,6 +152,7 @@ test('the last available hit succeeds without creating a block', async () => {
 		limiter: blockingLimiter,
 		remaining: 0,
 		ttl: expect.any(Number),
+		is_hit_unique: true,
 	});
 	expectTtl(current.ttl, deadline, [before, after]);
 	expectTtl(hit.ttl, deadline, [before, after]);
@@ -220,6 +242,7 @@ test('expired usage and block fields allow a fresh window', async () => {
 		limiter: blockingLimiter,
 		remaining: 3,
 		ttl: expect.any(Number),
+		is_hit_unique: true,
 	});
 	expect(await redisXClient.HGETALL(blockingKey)).toEqual({});
 	expect(await redisXClient.HGETALL(blockKey)).toEqual({});
@@ -230,6 +253,7 @@ test('expired usage and block fields allow a fresh window', async () => {
 		limiter: blockingLimiter,
 		remaining: 2,
 		ttl: expect.any(Number),
+		is_hit_unique: true,
 	});
 	expect(await redisXClient.HGETALL(blockingKey)).toEqual({ subject: '1' });
 	const deadline = await hashFieldExpiration(blockingKey, 'subject');
