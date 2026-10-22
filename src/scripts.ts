@@ -1,6 +1,5 @@
+import { randomBytes } from 'node:crypto';
 import type { RedisXClient } from '@redis-x/client';
-import { nanoid } from 'nanoid';
-import type { RedisXLimiter } from './main.js';
 import lua_script from './script.lua' with { type: 'text' };
 import { REDIS_PREFIX, type Script } from './utils.js';
 
@@ -57,7 +56,9 @@ export async function runScript(
 		[`${REDIS_PREFIX}:_block`, ...redis_keys],
 		op,
 		String(key),
-		hit_id === undefined ? nanoid(16) : String(hit_id),
+		hit_id === undefined
+			? randomBytes(12).toString('base64url')
+			: String(hit_id),
 		...redis_args,
 	);
 

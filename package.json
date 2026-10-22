@@ -20,9 +20,7 @@
 		"node": ">=22.0.0"
 	},
 	"dependencies": {
-		"@redis-x/client": "file:/tmp/devpack/github/@redis-x/client/pack-be7f55c.tar.gz",
-		"nanoid": "6.0.2",
-		"valibot": "1.5.0"
+		"@redis-x/client": "file:/tmp/devpack/github/@redis-x/client/pack-be7f55c.tar.gz"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.4",
@@ -44,7 +42,7 @@
 		"build": "tsdown src/main.ts --format esm --format cjs --dts --publint --unused",
 		"check": "lint && bun run test && bun run build",
 		"redis:up": "docker ps | grep test-redis >/dev/null || docker run --rm -d -p 16379:6379 --name test-redis redis:7.4-alpine",
-		"test": "bun run build && bun run redis:up && bun test && npm run test:vitest",
+		"test": "bun run redis:up && bun test && npm run test:vitest",
 		"test:vitest": "vitest run --no-file-parallelism"
 	},
 	"repository": {
