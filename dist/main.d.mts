@@ -1,4 +1,8 @@
 import { RedisXClient } from "@redis-x/client";
+import { RedisClientType, RedisFunctions, RedisModules, RedisScripts } from "redis";
+//#region src/utils.d.ts
+type RedisClient = RedisClientType<RedisModules, RedisFunctions, RedisScripts>;
+//#endregion
 //#region src/scripts.d.ts
 type UsageState = {
   name: string;
@@ -46,7 +50,7 @@ export declare class RedisXLimiter {
   readonly type: RedisXLimiterType;
   readonly name: string;
   readonly priority: number;
-  constructor(redisXClient: RedisXClient, options: {
+  constructor(redisClient: RedisClient | RedisXClient, options: {
     /** Limiter type. Check {@link RedisXLimiterType}. */
     type: RedisXLimiterType;
     /**

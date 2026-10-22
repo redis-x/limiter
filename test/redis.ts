@@ -1,7 +1,8 @@
 import { RedisXClient } from '@redis-x/client';
 import { createClient } from 'redis';
+import type { RedisClient } from '../src/utils.js';
 
-const redisClient = createClient({
+export const redisClient: RedisClient = createClient({
 	socket: {
 		port: 16379,
 	},

@@ -19,8 +19,9 @@
 	"engines": {
 		"node": ">=22.0.0"
 	},
-	"dependencies": {
-		"@redis-x/client": "file:/tmp/devpack/github/@redis-x/client/pack-be7f55c.tar.gz"
+	"peerDependencies": {
+		"@redis-x/client": "file:/tmp/devpack/github/@redis-x/client/pack-be7f55c.tar.gz",
+		"redis": "^4.6"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.4",

@@ -4,9 +4,6 @@
   "workspaces": {
     "": {
       "name": "@redis-x/limiter",
-      "dependencies": {
-        "@redis-x/client": "file:/tmp/devpack/github/@redis-x/client/pack-be7f55c.tar.gz",
-      },
       "devDependencies": {
         "@biomejs/biome": "2.5.4",
         "@kirick/lint": "0.4.1",
@@ -19,6 +16,10 @@
         "typescript": "6.0.3",
         "unplugin-unused": "0.6.0",
         "vitest": "5.0.3",
+      },
+      "peerDependencies": {
+        "@redis-x/client": "file:/tmp/devpack/github/@redis-x/client/pack-be7f55c.tar.gz",
+        "redis": "^4.6",
       },
     },
   },

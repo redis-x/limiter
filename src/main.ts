@@ -6,7 +6,12 @@ import {
 	type RedisXLimiterBlock,
 	type RedisXLimiterUsage,
 } from './state.js';
-import { REDIS_PREFIX, type Script } from './utils.js';
+import {
+	getRedisXClient,
+	REDIS_PREFIX,
+	type RedisClient,
+	type Script,
+} from './utils.js';
 
 export type { UsageState } from './scripts.js';
 
@@ -46,7 +51,7 @@ export class RedisXLimiter {
 	_redis_args: string[];
 
 	constructor(
-		redisXClient: RedisXClient,
+		redisClient: RedisClient | RedisXClient,
 		options: {
 			/** Limiter type. Check {@link RedisXLimiterType}. */
 			type: RedisXLimiterType;
@@ -112,7 +117,7 @@ export class RedisXLimiter {
 			this.priority = options.priority;
 		}
 
-		this._script = createScript(redisXClient);
+		this._script = createScript(getRedisXClient(redisClient));
 
 		this._redis_args = [
 			options.type,
