@@ -20,7 +20,7 @@
 		"node": ">=22.0.0"
 	},
 	"peerDependencies": {
-		"@redis-x/client": "file:/tmp/devpack/github/@redis-x/client/pack-be7f55c.tar.gz",
+		"@redis-x/client": "github:redis-x/client#22509c416203b9b4674cf5732df30f823493f69d",
 		"redis": "^4.6"
 	},
 	"devDependencies": {
