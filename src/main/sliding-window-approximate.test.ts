@@ -295,3 +295,24 @@ test('expired epochs and block fields disappear and allow a fresh hit', async ()
 	expect(await hashFieldExpiration(s.key, s.currentField)).toBe(s.deadline);
 	expect(await redisXClient.HGETALL(blockKey)).toEqual({});
 });
+
+test('reset deletes only the subject epochs and block', async () => {
+	const { now, key, deadline } = await setWindow(blockingLimiter, 2, 1);
+	const otherField = `${Math.floor(now / ttl)}:other`;
+	const otherBlockField = `${blockingLimiter.name}:other`;
+	await setHashField(key, otherField, { value: 1, deadline });
+	await Promise.all(
+		[blockField, otherBlockField].map((field) =>
+			setHashField(blockKey, field, { value: '', deadline: now + blockTtl }),
+		),
+	);
+
+	await blockingLimiter.reset('subject');
+
+	expect(await redisXClient.HGETALL(key)).toEqual({ [otherField]: '1' });
+	expect(await hashFieldExpiration(key, otherField)).toBe(deadline);
+	expect(await redisXClient.HGETALL(blockKey)).toEqual({
+		[otherBlockField]: '',
+	});
+	expect(await blockingLimiter.get('subject')).toMatchObject({ remaining: 3 });
+});

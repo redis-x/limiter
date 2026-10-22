@@ -10,7 +10,7 @@ A robust rate limiter implemented with Redis for Node.js applications.
 - 🚀 **High Performance**: Efficient implementation using Redis atomic operations via Lua scripts
 - 🔄 **Multiple Limiter Types**: Fixed window, sliding window (exact or approximate) and token bucket
 - ⏱️ **Configurable TTL**: Set time limits for both counting windows and blocking periods
-- 🛠️ **Flexible API**: Check, hit, and get limits one by one or in atomic batches
+- 🛠️ **Flexible API**: Check, hit, get, and reset limits one by one or in atomic batches
 - 🔒 **Type-Safe**: Written in TypeScript with full type definitions
 
 ## Installation
@@ -192,3 +192,15 @@ Example response when limited, where `ttl` is seconds until a hit can succeed:
 ```
 
 For a batch, `get()` selects a limiter the same way as `hit()`, and `getAll()` returns the state of every limiter.
+
+### Resetting Limits
+
+`reset(key)` deletes a key's usage and blocks in one atomic Redis script, so its next hit starts with a full quota. For example, lift the CAPTCHA block from the [priority example](#priority) once the user solves it:
+
+```typescript
+// Reset a single limiter
+await usernames.reset(ip_address);
+
+// Reset every limiter in a batch
+await batch.reset(ip_address);
+```

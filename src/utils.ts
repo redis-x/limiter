@@ -1,12 +1,10 @@
-import { RedisXClient, type RedisXScript } from '@redis-x/client';
+import { RedisXClient } from '@redis-x/client';
 import type {
 	RedisClientType,
 	RedisFunctions,
 	RedisModules,
 	RedisScripts,
 } from 'redis';
-
-export type Script = RedisXScript<string[], unknown>;
 
 export type RedisClient = RedisClientType<
 	RedisModules,

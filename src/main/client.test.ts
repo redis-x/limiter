@@ -26,7 +26,7 @@ test('limiters sharing a redis client can be batched', async () => {
 		name: 'client-second',
 	});
 
-	expect(first._script).toBe(second._script);
+	expect(first._scripts).toBe(second._scripts);
 	expect(await new RedisXLimitersBatch(first, second).hit('subject')).toEqual({
 		limiter: first,
 		remaining: 1,

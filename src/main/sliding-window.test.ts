@@ -346,3 +346,25 @@ test('calls without hit IDs create distinct members', async () => {
 	);
 	expect(await redisXClient.EXISTS(blockKey)).toBe(0);
 });
+
+test('reset deletes only the subject window and block', async () => {
+	const now = await redisTime();
+	const otherKey = `${REDIS_PREFIX}:${blockingLimiter.name}:other`;
+	const otherBlockField = `${blockingLimiter.name}:other`;
+	await setWindow(blockingKey, { a: now + ttl, b: now + ttl, c: now + ttl });
+	await setWindow(otherKey, { a: now + ttl });
+	await Promise.all(
+		[blockField, otherBlockField].map((field) =>
+			setHashField(blockKey, field, { value: '', deadline: now + blockTtl }),
+		),
+	);
+
+	await blockingLimiter.reset('subject');
+
+	expect(await redisXClient.EXISTS(blockingKey)).toBe(0);
+	expect(await readWindow(otherKey)).toEqual({ a: now + ttl });
+	expect(await redisXClient.HGETALL(blockKey)).toEqual({
+		[otherBlockField]: '',
+	});
+	expect(await blockingLimiter.get('subject')).toMatchObject({ remaining: 3 });
+});

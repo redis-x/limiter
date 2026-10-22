@@ -235,3 +235,27 @@ test('a mixed batch returns the selected states, commits every accepted hit, and
 
 	expect(await readUsage(epoch)).toEqual(accepted);
 });
+
+test('reset deletes usage and blocks of every limiter for one subject', async () => {
+	await batch.hit('subject');
+	await expect(batch.hit('subject')).rejects.toThrow(
+		RedisXLimiterExceededError,
+	);
+	await batch.hit('other');
+	expect(Object.keys(await redisXClient.HGETALL(blockKey))).toHaveLength(3);
+
+	await batch.reset('subject');
+
+	expect(await redisXClient.EXISTS(blockKey)).toBe(0);
+	expect(await redisXClient.EXISTS(slidingKey)).toBe(0);
+	expect(
+		await redisXClient.EXISTS(`${REDIS_PREFIX}:${longBlock.name}:other`),
+	).toBe(1);
+	for (const key of [lowKey, fixedKey, approximateKey, bucketKey]) {
+		expect(Object.keys(await redisXClient.HGETALL(key))).toEqual([
+			expect.stringMatching(/other$/u),
+		]);
+	}
+
+	expect(await batch.hit('subject')).toMatchObject({ remaining: 0 });
+});

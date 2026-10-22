@@ -299,3 +299,24 @@ test('expired usage and block fields restore full capacity and allow a fresh hit
 	expect(deadline).toBeLessThanOrEqual(after + 1201);
 	expect(await redisXClient.HGETALL(blockKey)).toEqual({});
 });
+
+test('reset deletes only the subject usage and block', async () => {
+	const now = await redisTime();
+	const otherBlockField = `${blockingLimiter.name}:other`;
+	await setHashField(blockingKey, 'subject', { value: 3, deadline: now + ttl });
+	await setHashField(blockingKey, 'other', { value: 1, deadline: now + ttl });
+	await Promise.all(
+		[blockField, otherBlockField].map((field) =>
+			setHashField(blockKey, field, { value: '', deadline: now + blockTtl }),
+		),
+	);
+
+	await blockingLimiter.reset('subject');
+
+	expect(await redisXClient.HGETALL(blockingKey)).toEqual({ other: '1' });
+	expect(await hashFieldExpiration(blockingKey, 'other')).toBe(now + ttl);
+	expect(await redisXClient.HGETALL(blockKey)).toEqual({
+		[otherBlockField]: '',
+	});
+	expect(await blockingLimiter.get('subject')).toMatchObject({ remaining: 3 });
+});

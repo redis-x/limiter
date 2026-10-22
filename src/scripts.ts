@@ -1,23 +1,48 @@
 import { randomBytes } from 'node:crypto';
-import type { RedisXClient } from '@redis-x/client';
+import type { RedisXClient, RedisXScript } from '@redis-x/client';
+import lua_reset from './reset.lua' with { type: 'text' };
 import lua_script from './script.lua' with { type: 'text' };
-import { REDIS_PREFIX, type Script } from './utils.js';
+import { REDIS_PREFIX } from './utils.js';
 
-const SCRIPTS = new WeakMap<RedisXClient, Script>();
+type Script = RedisXScript<string[], unknown>;
+
+export type Scripts = {
+	main: Script;
+	reset: Script;
+};
+
+const SCRIPTS = new WeakMap<RedisXClient, Scripts>();
 export enum SCRIPT_OP {
 	GET = '1',
 	HIT = '2',
 }
 
-/** Creates scripts on RedisX client. */
-export function createScript(redisXClient: RedisXClient): Script {
-	let script = SCRIPTS.get(redisXClient);
-	if (!script) {
-		script = redisXClient.createScript(lua_script);
-		SCRIPTS.set(redisXClient, script);
+/** Returns limiter scripts for a RedisX client, creating them once per client. */
+export function getScripts(redisXClient: RedisXClient): Scripts {
+	let scripts = SCRIPTS.get(redisXClient);
+	if (!scripts) {
+		scripts = {
+			main: redisXClient.createScript(lua_script),
+			reset: redisXClient.createScript(lua_reset),
+		};
+		SCRIPTS.set(redisXClient, scripts);
 	}
 
-	return script;
+	return scripts;
+}
+
+/** Deletes usage and blocks of the limiting key in one script execution. */
+export async function runResetScript(
+	redisXScript: Script,
+	key: string | number,
+	redis_keys: string[],
+	redis_args: string[],
+): Promise<void> {
+	await redisXScript.executeWithKeys(
+		[`${REDIS_PREFIX}:_block`, ...redis_keys],
+		String(key),
+		...redis_args,
+	);
 }
 
 export class ScriptResultError extends Error {

@@ -1,8 +1,5 @@
 import { RedisXClient } from "@redis-x/client";
 import { RedisClientType, RedisFunctions, RedisModules, RedisScripts } from "redis";
-//#region src/utils.d.ts
-type RedisClient = RedisClientType<RedisModules, RedisFunctions, RedisScripts>;
-//#endregion
 //#region src/scripts.d.ts
 type UsageState = {
   name: string;
@@ -30,6 +27,9 @@ type RedisXLimiterUsage = {
    */
   is_hit_unique: boolean;
 };
+//#endregion
+//#region src/utils.d.ts
+type RedisClient = RedisClientType<RedisModules, RedisFunctions, RedisScripts>;
 //#endregion
 //#region src/main.d.ts
 export declare enum RedisXLimiterType {
@@ -73,6 +73,7 @@ export declare class RedisXLimiter {
   check(key: string | number, hit_id?: string | number): Promise<boolean>;
   get(key: string | number): Promise<RedisXLimiterBlock | RedisXLimiterUsage>;
   hit(key: string | number, hit_id?: string | number): Promise<RedisXLimiterUsage>;
+  reset(key: string | number): Promise<void>;
 }
 export declare class RedisXLimitersBatch {
   #private;
@@ -81,6 +82,7 @@ export declare class RedisXLimitersBatch {
   get(key: string | number): Promise<RedisXLimiterBlock | RedisXLimiterUsage>;
   getAll(key: string | number): Promise<(RedisXLimiterBlock | RedisXLimiterUsage)[]>;
   hit(key: string | number, hit_id?: string | number): Promise<RedisXLimiterUsage>;
+  reset(key: string | number): Promise<void>;
 }
 //#endregion
 export type { UsageState };

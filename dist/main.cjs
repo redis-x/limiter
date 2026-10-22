@@ -1,6 +1,9 @@
 Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 let node_crypto = require("node:crypto");
 let _redis_x_client = require("@redis-x/client");
+//#region src/reset.lua
+var reset_default = "local ts = tonumber(redis.call('TIME')[1])\n\nlocal key_block = KEYS[1]\nlocal limiting_key = ARGV[1]\n\n-- Limiters use the same five arguments as the main script: type, name, limit, ttl, block ttl.\nlocal fields_block = {}\nfor i = 2, #ARGV, 5 do\n	local type = ARGV[i]\n	local key = KEYS[#fields_block + 2]\n	table.insert(fields_block, ARGV[i + 1] .. \":\" .. limiting_key)\n\n	if type == \"2\" then\n		redis.call(\"DEL\", key)\n	elseif type == \"3\" then\n		-- Only the current and previous epochs of the Redis clock are retained.\n		local epoch = math.floor(ts / tonumber(ARGV[i + 3]))\n		redis.call(\"HDEL\", key, epoch - 1 .. \":\" .. limiting_key, epoch .. \":\" .. limiting_key)\n	else\n		redis.call(\"HDEL\", key, limiting_key)\n	end\nend\n\nredis.call(\"HDEL\", key_block, unpack(fields_block))\n";
+//#endregion
 //#region src/script.lua
 var script_default = "local ts = tonumber(redis.call('TIME')[1])\n\n-- 1=get, 2=hit\nlocal op = tonumber(ARGV[1])\nlocal key_block = KEYS[1]\nlocal limiting_key = ARGV[2]\nlocal hit_id = ARGV[3]\n\nlocal limiters = {}\nlocal limiters_block_fields = {}\nfor i = 4, #ARGV, 5 do\n	local name = ARGV[i + 1]\n	local field_block = name .. \":\" .. limiting_key\n	table.insert(limiters, {\n		type = ARGV[i],\n		name = name,\n		key = KEYS[#limiters + 2],\n		field_block = field_block,\n		limit = tonumber(ARGV[i + 2]),\n		ttl = tonumber(ARGV[i + 3]),\n		ttl_block = tonumber(ARGV[i + 4]),\n	})\n	table.insert(limiters_block_fields, field_block)\nend\n\nlocal resp_blocked = redis.call('HTTL', key_block, \"FIELDS\", #limiters_block_fields, unpack(limiters_block_fields))\nlocal result_blocks = {}\nlocal result_usage = {}\nlocal result_names = {}\nlocal function save_result(type, value)\n	local limiter_name = value[1]\n	if result_names[limiter_name] == nil then\n		if type == 0 then\n			table.insert(result_usage, value)\n		elseif type == 1 then\n			table.insert(result_blocks, value)\n		end\n		result_names[limiter_name] = true\n	end\nend\nfor index, limiter in ipairs(limiters) do\n	local ttl = resp_blocked[index]\n	if ttl > 0 then\n		save_result(1, { limiter.name, ttl })\n	end\nend\n\nlocal function get_epoch(size)\n	return math.floor(ts / size)\nend\nlocal function get_epoch_ts_end(epoch, size)\n	return (epoch + 1) * size\nend\n\nlocal hit_args = {}\nlocal function set_block(limiter)\n	if op == 2 and limiter.ttl_block > 0 then\n		-- Blocks persist even when the batch discards all queued usage changes.\n		redis.call(\"HSET\", key_block, limiter.field_block, \"\")\n		redis.call(\"HEXPIREAT\", key_block, ts + limiter.ttl_block, \"FIELDS\", 1, limiter.field_block)\n		save_result(1, { limiter.name, limiter.ttl_block })\n	end\nend\n\nfor _, limiter in ipairs(limiters) do\n	-- Skip iterating limiters that already blocked\n	if result_names[limiter.name] ~= nil then\n	-- ---------------------------------------------------\n	-- fixed window / fixed window with user defined start\n	-- ---------------------------------------------------\n	elseif limiter.type == \"0\" or limiter.type == \"1\" then\n		local value = redis.call(\"HGET\", limiter.key, limiting_key)\n		local counter = tonumber(value) or 0\n		-- Capture exhaustion before a hit can consume the last available slot.\n		local is_exhausted = counter >= limiter.limit\n		-- No active window means there is no scheduled usage change.\n		local ts_expire = nil\n		if counter > 0 then\n			ts_expire = redis.call(\"HEXPIRETIME\", limiter.key, \"FIELDS\", 1, limiting_key)[1]\n		elseif limiter.type == \"0\" then\n			ts_expire = get_epoch_ts_end(get_epoch(limiter.ttl), limiter.ttl)\n		end\n\n		if op == 2 then\n			if is_exhausted then\n				set_block(limiter)\n			else\n				if counter == 0 then\n					if limiter.type == \"1\" then\n						ts_expire = ts + limiter.ttl\n					end\n\n					table.insert(hit_args, {\n						\"HSET\", limiter.key, limiting_key, 1,\n					})\n					table.insert(hit_args, {\n						\"HEXPIREAT\", limiter.key, ts_expire, \"FIELDS\", 1, limiting_key,\n					})\n				else\n					table.insert(hit_args, {\n						\"HINCRBY\", limiter.key, limiting_key, 1,\n					})\n				end\n				counter = counter + 1\n			end\n		end\n\n		-- Fixed-window quota fully resets at its deadline. Exhaustion recovers\n		-- then too; a separately stored block retains its own expiration.\n		local ttl_reset = -1\n		if ts_expire ~= nil then\n			ttl_reset = ts_expire - ts\n		end\n		if is_exhausted then\n			save_result(1, { limiter.name, ttl_reset })\n		else\n			save_result(0, {\n				limiter.name,\n				math.max(0, limiter.limit - counter),\n				ttl_reset,\n			})\n		end\n	-- ---------------------------------------------------\n	-- sliding window\n	-- ---------------------------------------------------\n	elseif limiter.type == \"2\" then\n		-- Reads ignore expired members without changing the sorted set.\n		local active_min = \"(\" .. ts\n		local counter = redis.call(\"ZCOUNT\", limiter.key, active_min, \"+inf\")\n		local score = tonumber(redis.call(\"ZSCORE\", limiter.key, hit_id))\n		local is_unique = score == nil or score <= ts\n		if is_unique and counter >= limiter.limit then\n			set_block(limiter)\n			-- Wait until enough members expire to admit one new distinct ID.\n			local next_score = redis.call(\"ZRANGE\", limiter.key, active_min, \"+inf\", \"BYSCORE\", \"LIMIT\", counter - limiter.limit, 1, \"WITHSCORES\")[2]\n			save_result(1, { limiter.name, tonumber(next_score) - ts })\n		else\n			local ts_expire = ts\n			if counter > 0 then\n				ts_expire = tonumber(redis.call(\"ZRANGE\", limiter.key, -1, -1, \"WITHSCORES\")[2])\n			end\n			if op == 2 then\n				local hit_expire = ts + limiter.ttl\n				ts_expire = math.max(ts_expire, hit_expire)\n				-- Cleanup, insertion, and refresh commit only when every limiter accepts.\n				table.insert(hit_args, {\n					\"ZREMRANGEBYSCORE\", limiter.key, \"-inf\", ts,\n				})\n				table.insert(hit_args, {\n					\"ZADD\", limiter.key, hit_expire, hit_id,\n				})\n				table.insert(hit_args, {\n					\"EXPIREAT\", limiter.key, ts_expire,\n				})\n				if is_unique then\n					counter = counter + 1\n				end\n			end\n			-- Full recovery uses the latest deadline; a repeat costs no new slot.\n			save_result(0, {\n				limiter.name,\n				math.max(0, limiter.limit - counter),\n				ts_expire - ts,\n				is_unique and 1 or 0,\n			})\n		end\n	-- ---------------------------------------------------\n	-- sliding window with approximation\n	-- ---------------------------------------------------\n	elseif limiter.type == \"3\" then\n		local epoch = get_epoch(limiter.ttl)\n		local ttl_remaining = limiter.ttl - (ts % limiter.ttl)\n		local field_previous = epoch - 1 .. \":\" .. limiting_key\n		local field_current = epoch .. \":\" .. limiting_key\n		local resp = redis.call(\"HMGET\", limiter.key, field_previous, field_current)\n		local counter_previous = tonumber(resp[1]) or 0\n		local counter_current = tonumber(resp[2]) or 0\n		local counter = counter_previous * ttl_remaining / limiter.ttl + counter_current\n		if counter + 1 > limiter.limit then\n			set_block(limiter)\n			local ttl_retry\n			if counter_current < limiter.limit then\n				-- Previous usage decays enough before this window ends.\n				local capacity_previous = limiter.limit - counter_current - 1\n				ttl_retry = math.ceil(\n					(counter_previous * ttl_remaining - capacity_previous * limiter.ttl) / counter_previous\n				)\n			else\n				-- Current usage can only decay after becoming the previous window.\n				ttl_retry = ttl_remaining + math.ceil(\n					(counter_current - limiter.limit + 1) * limiter.ttl / counter_current\n				)\n			end\n			save_result(1, { limiter.name, ttl_retry })\n		else\n			if op == 2 then\n				if counter_current == 0 then\n					table.insert(hit_args, {\n						\"HSET\", limiter.key, field_current, 1,\n					})\n					table.insert(hit_args, {\n						\"HEXPIREAT\", limiter.key, get_epoch_ts_end(epoch + 1, limiter.ttl), \"FIELDS\", 1, field_current,\n					})\n				else\n					table.insert(hit_args, {\n						\"HINCRBY\", limiter.key, field_current, 1,\n					})\n				end\n				counter_current = counter_current + 1\n				counter = counter + 1\n			end\n			-- Usage reports full recovery, not the next available whole hit.\n			local ttl_reset = 0\n			if counter_current > 0 then\n				ttl_reset = ttl_remaining + limiter.ttl\n			elseif counter_previous > 0 then\n				ttl_reset = ttl_remaining\n			end\n			save_result(0, {\n				limiter.name,\n				math.max(0, math.floor(limiter.limit - counter)),\n				ttl_reset,\n			})\n		end\n	-- ---------------------------------------------------\n	-- token bucket\n	-- ---------------------------------------------------\n	elseif limiter.type == \"4\" then\n		local value = redis.call(\"HGET\", limiter.key, limiting_key)\n		local counter = tonumber(value) or 0\n		local ts_anchor = ts\n		local ts_expire = ts\n		if counter > 0 then\n			ts_expire = redis.call(\"HEXPIRETIME\", limiter.key, \"FIELDS\", 1, limiting_key)[1]\n			if ts_expire > ts then\n				ts_anchor = ts_expire - math.ceil(counter * limiter.ttl / limiter.limit)\n			else\n				counter = 0\n				ts_expire = ts\n			end\n		end\n\n		-- Rebase by one capacity without changing the represented refill progress.\n		if counter == limiter.limit then\n			counter = 0\n			ts_anchor = ts_anchor + limiter.ttl\n		end\n		local remaining = limiter.limit - counter + math.floor((ts - ts_anchor) * limiter.limit / limiter.ttl)\n		counter = counter + 1\n		-- Round the cumulative duration, not each individual token's refill time.\n		local ts_next = ts_anchor + math.ceil(counter * limiter.ttl / limiter.limit)\n		local ttl_retry = ts_next - ts - limiter.ttl\n		if ttl_retry > 0 then\n			set_block(limiter)\n			save_result(1, { limiter.name, ttl_retry })\n		else\n			if op == 2 then\n				table.insert(hit_args, {\n					\"HSET\", limiter.key, limiting_key, string.format(\"%.0f\", counter),\n				})\n				table.insert(hit_args, {\n					\"HEXPIREAT\", limiter.key, ts_next, \"FIELDS\", 1, limiting_key,\n				})\n				remaining = remaining - 1\n				ts_expire = ts_next\n			end\n			-- Usage returns full refill; exhaustion above returns the next whole token.\n			save_result(0, {\n				limiter.name,\n				math.max(0, math.min(limiter.limit, remaining)),\n				ts_expire - ts,\n			})\n		end\n	else\n		return redis.error_reply(\"UNSUP unsupported limiter type \" .. limiter.type)\n	end\nend\n\nif op == 2 then\n	if #result_blocks > 0 then\n		return { result_blocks, {} }\n	end\n	for _, args in ipairs(hit_args) do\n		redis.call(unpack(args))\n	end\n	return { {}, result_usage }\nend\n\nreturn { result_blocks, result_usage }\n";
 //#endregion
@@ -20,14 +23,21 @@ function getRedisXClient(client) {
 //#endregion
 //#region src/scripts.ts
 const SCRIPTS = /* @__PURE__ */ new WeakMap();
-/** Creates scripts on RedisX client. */
-function createScript(redisXClient) {
-	let script = SCRIPTS.get(redisXClient);
-	if (!script) {
-		script = redisXClient.createScript(script_default);
-		SCRIPTS.set(redisXClient, script);
+/** Returns limiter scripts for a RedisX client, creating them once per client. */
+function getScripts(redisXClient) {
+	let scripts = SCRIPTS.get(redisXClient);
+	if (!scripts) {
+		scripts = {
+			main: redisXClient.createScript(script_default),
+			reset: redisXClient.createScript(reset_default)
+		};
+		SCRIPTS.set(redisXClient, scripts);
 	}
-	return script;
+	return scripts;
+}
+/** Deletes usage and blocks of the limiting key in one script execution. */
+async function runResetScript(redisXScript, key, redis_keys, redis_args) {
+	await redisXScript.executeWithKeys([`${REDIS_PREFIX}:_block`, ...redis_keys], String(key), ...redis_args);
 }
 var ScriptResultError = class extends Error {
 	constructor() {
@@ -137,7 +147,7 @@ var RedisXLimiter = class {
 	name;
 	priority = Number.MAX_SAFE_INTEGER;
 	/** @internal */
-	_script;
+	_scripts;
 	/** @internal */
 	_redis_args;
 	constructor(redisClient, options) {
@@ -150,7 +160,7 @@ var RedisXLimiter = class {
 		if (LIMITER_NAMES.has(this.name)) throw new TypeError("Duplicate limiter name. You can not reuse the same name for multiple limiters to avoid conflicts.");
 		LIMITER_NAMES.add(this.name);
 		if (options.priority !== void 0) this.priority = options.priority;
-		this._script = createScript(getRedisXClient(redisClient));
+		this._scripts = getScripts(getRedisXClient(redisClient));
 		this._redis_args = [
 			options.type,
 			options.name,
@@ -165,7 +175,7 @@ var RedisXLimiter = class {
 		return `${REDIS_PREFIX}:${this.name}`;
 	}
 	#runScript(op, key, hit_id) {
-		return runScript(this._script, op, key, hit_id, [this._getRedisKey(key)], this._redis_args);
+		return runScript(this._scripts.main, op, key, hit_id, [this._getRedisKey(key)], this._redis_args);
 	}
 	async check(key, hit_id) {
 		return check(await this.#runScript("1", key, hit_id));
@@ -197,23 +207,27 @@ var RedisXLimiter = class {
 			is_hit_unique
 		};
 	}
+	async reset(key) {
+		if (typeof key === "string" && !inkey_regex.test(key)) throw new TypeError("Invalid key.");
+		await runResetScript(this._scripts.reset, key, [this._getRedisKey(key)], this._redis_args);
+	}
 };
 var RedisXLimitersBatch = class {
 	#limiters;
-	#script;
+	#scripts;
 	#redis_args = [];
 	constructor(...limiters) {
 		this.#limiters = [...new Set(limiters)];
-		const script = this.#limiters[0]?._script;
-		if (script === void 0) throw new TypeError("At least one limiter is required.");
-		this.#script = script;
+		const scripts = this.#limiters[0]?._scripts;
+		if (scripts === void 0) throw new TypeError("At least one limiter is required.");
+		this.#scripts = scripts;
 		for (const limiter of this.#limiters) {
-			if (limiter._script !== this.#script) throw new Error("All limiters must use the same Redis client.");
+			if (limiter._scripts !== this.#scripts) throw new Error("All limiters must use the same Redis client.");
 			this.#redis_args.push(...limiter._redis_args);
 		}
 	}
 	#runScript(op, key, hit_id) {
-		return runScript(this.#script, op, key, hit_id, this.#limiters.map((limiter) => limiter._getRedisKey(key)), this.#redis_args);
+		return runScript(this.#scripts.main, op, key, hit_id, this.#limiters.map((limiter) => limiter._getRedisKey(key)), this.#redis_args);
 	}
 	async check(key, hit_id) {
 		return check(await this.#runScript("1", key, hit_id));
@@ -253,6 +267,10 @@ var RedisXLimitersBatch = class {
 			throw new RedisXLimiterExceededError(limiter, ttl);
 		}
 		return getSmallestLimit(this.#limiters, state.usage);
+	}
+	async reset(key) {
+		if (typeof key === "string" && !inkey_regex.test(key)) throw new TypeError("Invalid key.");
+		await runResetScript(this.#scripts.reset, key, this.#limiters.map((limiter) => limiter._getRedisKey(key)), this.#redis_args);
 	}
 };
 //#endregion
