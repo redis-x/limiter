@@ -18,7 +18,7 @@
         "vitest": "5.0.3",
       },
       "peerDependencies": {
-        "@redis-x/client": "github:redis-x/client#22509c416203b9b4674cf5732df30f823493f69d",
+        "@redis-x/client": "github:redis-x/client#00bda02d0da78e1645ccfebea8f5c9484801259b",
         "redis": "^4.6",
       },
     },
@@ -128,7 +128,7 @@
 
     "@quansync/fs": ["@quansync/fs@1.1.0", "", { "dependencies": { "quansync": "^1.0.0" } }, "sha512-qAPG/t3HqML1TlN7sY/pTbEjzFVAKsMjNNMGheyDosro+kT4iw2KCUoHcVdmliwWjorm4elZbgNQyU2eD97eDg=="],
 
-    "@redis-x/client": ["@redis-x/client@github:redis-x/client#22509c4", { "peerDependencies": { "redis": "^4.6" } }, "redis-x-client-22509c4", "sha512-/tXn1XyTRj6BynsPFfoM8sHLYzfjB+IIJR18xhds771gDamVfbmLAzZEQuHCt4ZTYPU+bClgzXPy3EFN5tzcGg=="],
+    "@redis-x/client": ["@redis-x/client@github:redis-x/client#00bda02", { "peerDependencies": { "redis": "^4.6" } }, "redis-x-client-00bda02", "sha512-JWtug36BanZdz0GRR2zmCQze1jPrL7Ul49CFrk6BbapYcPrn+G1PKmNh9NdO8EztsyjLMr5doI+qtPR+sbyF3g=="],
 
     "@redis/bloom": ["@redis/bloom@1.2.0", "", { "peerDependencies": { "@redis/client": "^1.0.0" } }, "sha512-HG2DFjYKbpNmVXsa0keLHp/3leGJz1mjh09f2RLGGLQZzSHpkmZWuwJbAvo3QcRY8p80m5+ZdXZdYOSBLlp7Cg=="],
 

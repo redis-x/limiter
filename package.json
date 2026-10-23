@@ -6,6 +6,9 @@
 		"access": "public"
 	},
 	"type": "module",
+	"files": [
+		"dist"
+	],
 	"exports": {
 		".": {
 			"types": {
@@ -20,7 +23,7 @@
 		"node": ">=22.0.0"
 	},
 	"peerDependencies": {
-		"@redis-x/client": "github:redis-x/client#22509c416203b9b4674cf5732df30f823493f69d",
+		"@redis-x/client": "github:redis-x/client#00bda02d0da78e1645ccfebea8f5c9484801259b",
 		"redis": "^4.6"
 	},
 	"devDependencies": {
