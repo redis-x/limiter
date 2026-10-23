@@ -18,7 +18,7 @@
         "vitest": "5.0.3",
       },
       "peerDependencies": {
-        "@redis-x/client": "github:redis-x/client#00bda02d0da78e1645ccfebea8f5c9484801259b",
+        "@redis-x/client": "^0.4.0",
         "redis": "^4.6",
       },
     },
@@ -128,7 +128,7 @@
 
     "@quansync/fs": ["@quansync/fs@1.1.0", "", { "dependencies": { "quansync": "^1.0.0" } }, "sha512-qAPG/t3HqML1TlN7sY/pTbEjzFVAKsMjNNMGheyDosro+kT4iw2KCUoHcVdmliwWjorm4elZbgNQyU2eD97eDg=="],
 
-    "@redis-x/client": ["@redis-x/client@github:redis-x/client#00bda02", { "peerDependencies": { "redis": "^4.6" } }, "redis-x-client-00bda02", "sha512-JWtug36BanZdz0GRR2zmCQze1jPrL7Ul49CFrk6BbapYcPrn+G1PKmNh9NdO8EztsyjLMr5doI+qtPR+sbyF3g=="],
+    "@redis-x/client": ["@redis-x/client@0.4.0", "", { "peerDependencies": { "redis": "^4.6" } }, "sha512-GCY8LUdUZEBCCGPvGo5bmiyMBeo0Kd5zQzGKzhbuY98Hp+FxcaOhi3Oc17sOePGiS/Wi1/Pq+EuEwku/XRMXTg=="],
 
     "@redis/bloom": ["@redis/bloom@1.2.0", "", { "peerDependencies": { "@redis/client": "^1.0.0" } }, "sha512-HG2DFjYKbpNmVXsa0keLHp/3leGJz1mjh09f2RLGGLQZzSHpkmZWuwJbAvo3QcRY8p80m5+ZdXZdYOSBLlp7Cg=="],
 

@@ -1,6 +1,6 @@
 {
 	"name": "@redis-x/limiter",
-	"version": "0.2.0-dev",
+	"version": "0.2.0",
 	"description": "A rate limiter implemented with Redis.",
 	"publishConfig": {
 		"access": "public"
@@ -23,7 +23,7 @@
 		"node": ">=22.0.0"
 	},
 	"peerDependencies": {
-		"@redis-x/client": "github:redis-x/client#00bda02d0da78e1645ccfebea8f5c9484801259b",
+		"@redis-x/client": "^0.4.0",
 		"redis": "^4.6"
 	},
 	"devDependencies": {
