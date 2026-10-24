@@ -1,17 +1,5 @@
 import { RedisXClient } from "@redis-x/client";
 import { RedisClientType, RedisFunctions, RedisModules, RedisScripts } from "redis";
-//#region src/scripts.d.ts
-type UsageState = {
-  name: string;
-  remaining: number;
-  ttl?: number;
-  /**
-   * False only for an active repeated sliding-window hit ID before this operation.
-   * True for every hit in other limiter types and new or expired sliding-window IDs.
-   */
-  is_hit_unique: boolean;
-};
-//#endregion
 //#region src/state.d.ts
 type RedisXLimiterBlock = {
   limiter: RedisXLimiter;
@@ -85,4 +73,4 @@ export declare class RedisXLimitersBatch {
   reset(key: string | number): Promise<void>;
 }
 //#endregion
-export type { UsageState };
+export {};

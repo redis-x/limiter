@@ -1,3 +1,4 @@
+import { getRedisXClient } from '@redis-x/client';
 import { afterEach, expect, test } from 'vitest';
 import { redisClient, redisXClient } from '../../test/redis.js';
 import {
@@ -36,4 +37,20 @@ test('limiters sharing a redis client can be batched', async () => {
 	expect(await redisXClient.HGETALL('@x:limiter:client-second')).toEqual({
 		subject: '1',
 	});
+});
+
+test('a redis client and the RedisX client that getRedisXClient returns for it can be batched', async () => {
+	const plain = new RedisXLimiter(redisClient, {
+		...options,
+		name: 'client-plain',
+	});
+	const shared = new RedisXLimiter(getRedisXClient(redisClient), {
+		...options,
+		name: 'client-shared',
+	});
+
+	expect(plain._scripts).toBe(shared._scripts);
+	expect(
+		await new RedisXLimitersBatch(plain, shared).hit('subject'),
+	).toMatchObject({ remaining: 1 });
 });

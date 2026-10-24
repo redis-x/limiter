@@ -18,7 +18,7 @@
         "vitest": "5.0.3",
       },
       "peerDependencies": {
-        "@redis-x/client": "^0.4.0",
+        "@redis-x/client": "^0.4.2",
         "redis": "^4.6",
       },
     },
@@ -128,7 +128,7 @@
 
     "@quansync/fs": ["@quansync/fs@1.1.0", "", { "dependencies": { "quansync": "^1.0.0" } }, "sha512-qAPG/t3HqML1TlN7sY/pTbEjzFVAKsMjNNMGheyDosro+kT4iw2KCUoHcVdmliwWjorm4elZbgNQyU2eD97eDg=="],
 
-    "@redis-x/client": ["@redis-x/client@0.4.0", "", { "peerDependencies": { "redis": "^4.6" } }, "sha512-GCY8LUdUZEBCCGPvGo5bmiyMBeo0Kd5zQzGKzhbuY98Hp+FxcaOhi3Oc17sOePGiS/Wi1/Pq+EuEwku/XRMXTg=="],
+    "@redis-x/client": ["@redis-x/client@0.4.2", "", { "peerDependencies": { "redis": "^4.6" } }, "sha512-iFSXgvtwOWyM0gQH7NJsYQ1J2DaexJ+qdPgV6UV+CFGNNqwbpVBvZrnihzbBZmMM7xVxRDlfkpV/N8Nm6xjBoA=="],
 
     "@redis/bloom": ["@redis/bloom@1.2.0", "", { "peerDependencies": { "@redis/client": "^1.0.0" } }, "sha512-HG2DFjYKbpNmVXsa0keLHp/3leGJz1mjh09f2RLGGLQZzSHpkmZWuwJbAvo3QcRY8p80m5+ZdXZdYOSBLlp7Cg=="],
 
