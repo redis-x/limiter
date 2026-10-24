@@ -1,6 +1,7 @@
 # @redis-x/limiter
 
 [![npm version](https://img.shields.io/npm/v/@redis-x/limiter.svg)](https://www.npmjs.com/package/@redis-x/limiter)
+[![Open on npmx.dev](https://npmx.dev/api/registry/badge/version/@redis-x/limiter?style=shieldsio&label=npmx.dev)](https://npmx.dev/package/@redis-x/limiter)
 [![license](https://img.shields.io/npm/l/@redis-x/limiter.svg?color=blue)](https://github.com/redis-x/limiter/blob/main/LICENSE)
 
 A robust rate limiter implemented with Redis for Node.js applications.

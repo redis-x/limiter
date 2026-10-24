@@ -1,5 +1,5 @@
+import { getRedisXClient } from "@redis-x/client";
 import { randomBytes } from "node:crypto";
-import { RedisXClient } from "@redis-x/client";
 //#region src/reset.lua
 var reset_default = "local ts = tonumber(redis.call('TIME')[1])\n\nlocal key_block = KEYS[1]\nlocal limiting_key = ARGV[1]\n\n-- Limiters use the same five arguments as the main script: type, name, limit, ttl, block ttl.\nlocal fields_block = {}\nfor i = 2, #ARGV, 5 do\n	local type = ARGV[i]\n	local key = KEYS[#fields_block + 2]\n	table.insert(fields_block, ARGV[i + 1] .. \":\" .. limiting_key)\n\n	if type == \"2\" then\n		redis.call(\"DEL\", key)\n	elseif type == \"3\" then\n		-- Only the current and previous epochs of the Redis clock are retained.\n		local epoch = math.floor(ts / tonumber(ARGV[i + 3]))\n		redis.call(\"HDEL\", key, epoch - 1 .. \":\" .. limiting_key, epoch .. \":\" .. limiting_key)\n	else\n		redis.call(\"HDEL\", key, limiting_key)\n	end\nend\n\nredis.call(\"HDEL\", key_block, unpack(fields_block))\n";
 //#endregion
@@ -8,17 +8,6 @@ var script_default = "local ts = tonumber(redis.call('TIME')[1])\n\n-- 1=get, 2=
 //#endregion
 //#region src/utils.ts
 const REDIS_PREFIX = "@x:limiter";
-const REDIS_X_CLIENTS = /* @__PURE__ */ new WeakMap();
-/** Returns the RedisX client to run commands with, wrapping each `redis` client only once. */
-function getRedisXClient(client) {
-	if ("createScript" in client) return client;
-	let redisXClient = REDIS_X_CLIENTS.get(client);
-	if (!redisXClient) {
-		redisXClient = new RedisXClient(client);
-		REDIS_X_CLIENTS.set(client, redisXClient);
-	}
-	return redisXClient;
-}
 //#endregion
 //#region src/scripts.ts
 const SCRIPTS = /* @__PURE__ */ new WeakMap();

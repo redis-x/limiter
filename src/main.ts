@@ -1,4 +1,4 @@
-import type { RedisXClient } from '@redis-x/client';
+import { getRedisXClient, type RedisXClient } from '@redis-x/client';
 import {
 	check,
 	getScripts,
@@ -13,9 +13,7 @@ import {
 	type RedisXLimiterBlock,
 	type RedisXLimiterUsage,
 } from './state.js';
-import { getRedisXClient, REDIS_PREFIX, type RedisClient } from './utils.js';
-
-export type { UsageState } from './scripts.js';
+import { REDIS_PREFIX, type RedisClient } from './utils.js';
 
 export enum RedisXLimiterType {
 	FixedWindow = '0',
