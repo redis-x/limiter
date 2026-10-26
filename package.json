@@ -53,7 +53,16 @@
 		"type": "git",
 		"url": "git+https://github.com/redis-x/limiter.git"
 	},
-	"keywords": [],
+	"keywords": [
+		"redis",
+		"redis-x",
+		"rate-limit",
+		"rate-limiter",
+		"throttle",
+		"fixed-window",
+		"sliding-window",
+		"token-bucket"
+	],
 	"author": "Daniil Kirichenko (https://twitter.com/kirickme)",
 	"license": "MIT",
 	"bugs": {

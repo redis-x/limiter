@@ -26,7 +26,8 @@ jobs:
     outputs:
       npm_tag: ${{ steps.set-tag.outputs.npm_tag }}
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
       - name: Determine NPM tag
         id: set-tag
@@ -69,7 +70,8 @@ jobs:
       - version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -85,7 +87,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Lint code
-        run: bunx lint
+        run: bun lint
 
       - name: Test code
         run: bun run test
@@ -99,7 +101,8 @@ jobs:
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
